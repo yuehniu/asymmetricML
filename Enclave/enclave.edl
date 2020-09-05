@@ -1,0 +1,18 @@
+enclave {
+    include "sgx_eid.h"
+    include "datatype.h"
+
+    trusted {
+        public void init_enclave_ctx(int n_lyrs, BOOL use_sgx, BOOL verbose);
+        public void set_lyrs_enclave(int n_lyrs);
+        public void set_sgx_enclave(BOOL use_sgx);
+        public void set_verbose_enclave(BOOL verbose);
+        public void add_ReLU_ctx_enclave(int batchsize, int n_chnls, int H, int W);
+        public void ReLU_fwd_enclave([in] const float* in, [in, out] float* out, int lyr);
+        public void ReLU_bwd_enclave([in] const float* in, [in, out] float* gradin, int lyr);
+    };
+
+    untrusted {
+        unsigned long int init_ctx_bridge(int n_lyrs, BOOL use_sgx, BOOL verbose);
+    };
+};

@@ -16,27 +16,24 @@ from ctypes import POINTER
 import torch
 import numpy as np
 
-SGXDNNLIB = "App/enclave_bridge.so"
-DNNLIB = "cmake-build-debug/libsgxdnn.so"
+SGXDNNLIB = "lib/enclave_bridge.so"
+DNNLIB = "lib/enclave_bridge.so"
 
 class sgxDNN(object):
     """A separate SGX execution context in parallel with untrusted PyTorch context
     """
-    def __init__(self, use_SGX=True, n_Enclaves = 1):
-        self.useSGX = use_SGX
-        if use_SGX:
+    def __init__(self, use_sgx=True, n_enclaves = 1):
+        self.useSGX = use_sgx
+        if use_sgx:
             self.lib = cdll.LoadLibrary(SGXDNNLIB)
         else:
             self.lib = cdll.LoadLibrary(DNNLIB)
 
         self.lyr = 0 # layer index
 
-        self.lib.sgxContext_new.restype = POINTER(py_object)
-        self.lib.sgxContext_set_lyrs.argtypes = [c_int, c_bool]
-        self.sgx_ctx = self.lib.sgxContext_new(0, use_SGX)
-
-        self.lib.sgxContext_enable_verbose.argtypes = [POINTER(py_object), c_bool]
-        self.lib.sgxContext_enable_verbose(self.sgx_ctx, False)
+        self.lib.init_ctx_bridge.restype = c_uint
+        self.lib.init_ctx_bridge.argtypes = [c_int, c_bool, c_bool]
+        self.eid = self.lib.init_ctx_bridge(0, use_sgx, False)
 
         self.batchsize = 0
         self.dim_in = []
@@ -59,8 +56,8 @@ class sgxDNN(object):
                     in_channels = self.in_memory_desc[module][1]
                     H = self.in_memory_desc[module][2]
                     W = self.in_memory_desc[module][3]
-                    self.lib.sgxContext_add_ReLU_Ctx.argtypes = [POINTER(py_object), c_int, c_int, c_int, c_int]
-                    self.lib.sgxContext_add_ReLU_Ctx(self.sgx_ctx, self.batchsize, in_channels, H, W)
+                    self.lib.add_ReLU_ctx_bridge.argtypes = [c_uint, c_int, c_int, c_int, c_int]
+                    self.lib.add_ReLU_ctx_bridge(self.eid, self.batchsize, in_channels, H, W)
 
     # ReLU interface
     def relu_fwd(self, input):
@@ -74,8 +71,8 @@ class sgxDNN(object):
         else:
             input_ptr = np.ctypeslib.as_ctypes(input.cpu().detach().numpy().reshape(-1))
             output_ptr = np.ctypeslib.as_ctypes(output.numpy().reshape(-1))
-            self.lib.sgxContext_relu_fwd.argtypes = [POINTER(py_object), POINTER(c_float), POINTER(c_float), c_int]
-            self.lib.sgxContext_relu_fwd(self.sgx_ctx, input_ptr, output_ptr, self.lyr)
+            self.lib.ReLU_fwd_bridge.argtypes = [c_uint, POINTER(c_float), POINTER(c_float), c_int]
+            self.lib.ReLU_fwd_bridge(self.eid, input_ptr, output_ptr, self.lyr)
 
         self.lyr += 1
         return output.reshape(input.size()).cuda()
@@ -93,27 +90,27 @@ class sgxDNN(object):
         else:
             input_ptr = np.ctypeslib.as_ctypes(input.cpu().detach().numpy().reshape(-1))
             gradin_ptr = np.ctypeslib.as_ctypes(gradin.numpy().reshape(-1))
-            self.lib.sgxContext_relu_bwd.argtypes = [POINTER(py_object), POINTER(c_float), POINTER(c_float), c_int]
-            self.lib.sgxContext_relu_bwd(self.sgx_ctx, input_ptr, gradin_ptr, self.lyr)
+            self.lib.ReLU_bwd_bridge.argtypes = [c_uint, POINTER(c_float), POINTER(c_float), c_int]
+            self.lib.ReLU_bwd_bridge(self.eid, input_ptr, gradin_ptr, self.lyr)
 
         return gradin.reshape(gradout.size()).cuda()
 
 class sgxReLU(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, sgx_Ctx=None):
+    def forward(ctx, input, sgx_ctx=None):
         """
         :param ctx:
         :param input: 'public' input from previous untrusted execution; 'private' input is kept in SGX
-        sgxCtx: SGX execution context
+        sgx_ctx: SGX execution context
         :return: 'public' output to untrusted execution; 'private' output is kept in SGX
         """
         ctx.save_for_backward(input)
-        ctx.constant = sgx_Ctx
+        ctx.constant = sgx_ctx
         # return input.clamp(min=0)
-        return sgx_Ctx.relu_fwd(input)
+        return sgx_ctx.relu_fwd(input)
 
     @staticmethod
     def backward(ctx, gradout):
         input,  = ctx.saved_tensors
-        sgx_Ctx = ctx.constant
-        return sgx_Ctx.relu_bwd(input, gradout), None
+        sgx_ctx = ctx.constant
+        return sgx_ctx.relu_bwd(input, gradout), None
