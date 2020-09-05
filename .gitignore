@@ -1,0 +1,20 @@
+# build file
+cmake-build-debug/
+
+# data file
+data/
+
+.idea/
+
+# cache file
+__pycache__
+*.swp
+*.pyc
+*_u.c
+*_u.h
+*_t.c
+*_t.h
+
+# obj file
+*.o
+*.so
