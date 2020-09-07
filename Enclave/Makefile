@@ -25,19 +25,19 @@ ENCLAVE_LINK_FLAGS := $(Enclave_Security_Link_Flags) \
              -Wl,--start-group -lsgx_tstdc -lsgx_tcxx -l$(Crypto_Library_Name) -l$(Service_Library_Name) -Wl,--end-group \
              -Wl,-Bstatic -Wl,-Bsymbolic -Wl,--no-undefined \
              -Wl,-pie,-eenclave_entry -Wl,--export-dynamic  \
-             -Wl,--defsym,__ImageBase=0 -Wl,--gc-sections
+             -Wl,--defsym,__ImageBase=0 -Wl,--gc-sections 
 
 SGX_COMMON_FLAGS += -Wall -Wextra -Winit-self -Wpointer-arith -Wreturn-type \
                     -Waddress -Wsequence-point -Wformat-security \
                     -Wmissing-include-dirs -Wfloat-equal -Wundef -Wshadow \
-                    -Wcast-align -Wconversion -Wredundant-decls
+                    -Wcast-align -Wconversion -Wredundant-decls 
 
 SGX_COMMON_CFLAGS := $(SGX_COMMON_FLAGS) -Wjump-misses-init -Wstrict-prototypes -Wunsuffixed-float-constants
 SGX_COMMON_CXXFLAGS := $(SGX_COMMON_FLAGS) -Wnon-virtual-dtor -std=c++11
 
-Enclave_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx -I../Include
+Enclave_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx -I../Include -I/usr/lib/gcc/x86_64-linux-gnu/7.5.0/include/ -I../Include/eigen3_sgx/
 
-Enclave_C_Flags := $(Enclave_Include_Paths) -nostdinc -fvisibility=hidden -fpie -ffunction-sections -fdata-sections
+Enclave_C_Flags := $(Enclave_Include_Paths) -nostdinc -fvisibility=hidden -fpie -ffunction-sections -fdata-sections -march=native
 CC_BELOW_4_9 := $(shell expr "`$(CC) -dumpversion`" \< "4.9")
 ifeq ($(CC_BELOW_4_9), 1)
         Enclave_C_Flags += -fstack-protector
@@ -65,7 +65,7 @@ clean:
 	@rm -f  $(ENCLAVE_NAME) $(SIGNED_ENCLAVE_NAME) *.o *_t.c *_t.h *_u.c *_u.h
 
 $(ENCLAVE_NAME): enclave_t.o $(ENCLAVE_CPP_OBJECTS)
-	@$(CXX) $^ -o $@ $(ENCLAVE_LINK_FLAGS)
+	@$(CXX) $^ -o $@ $(ENCLAVE_LINK_FLAGS) -fopenmp
 	@echo "LINK => $@"
 
 enclave_t.h: $(SGX_EDGER8R) enclave.edl

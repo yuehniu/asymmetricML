@@ -46,11 +46,11 @@ extern "C"
         add_ReLU_ctx_enclave(eid, batchsize, n_chnls, H, W);
     }
 
-    void ReLU_fwd_bridge(sgx_enclave_id_t eid, const float* in, float* out, int lyr) {
+    void ReLU_fwd_bridge(sgx_enclave_id_t eid, float* in, float* out, int lyr) {
         ReLU_fwd_enclave(eid, in, out, lyr);
     }
 
-    void ReLU_bwd_bridge(sgx_enclave_id_t eid, const float *in, float* gradin, int lyr) {
-        ReLU_bwd_enclave(eid, in, gradin, lyr);
+    void ReLU_bwd_bridge(sgx_enclave_id_t eid, float* gradin, int lyr) {
+        ReLU_bwd_enclave(eid, gradin, lyr);
     }
 }

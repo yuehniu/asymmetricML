@@ -24,6 +24,7 @@ Note:
 import argparse
 import os
 import sys
+import time
 import torch
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
@@ -128,12 +129,18 @@ def main():
         #    torch.save(state, file_name)
 
 def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
     avg_loss = AverageMeter()
     avg_acc = AverageMeter()
 
     model.train()
 
+    end = time.time()
     for i, (input, target) in enumerate(train_loader):
+        # record data loading time
+        data_time.update(time.time() - end)
+
         if args.device == 'gpu':
             input = input.cuda()
             target = target.cuda()
@@ -156,10 +163,18 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
         avg_acc.update(prec1.item(), input.size(0))
         avg_loss.update(loss.item(), input.size(0))
 
+        # record elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
+
         if i % args.check_freq == 0:
-            print('Epoch: [{}][{}/{}]\t'
-                  'Loss {:.4f}\t'
-                  'Prec@1 {:.3f}'.format(epoch, i, len(train_loader), avg_loss.avg, avg_acc.avg))
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  'Loss {avg_loss.avg:.4f}\t'
+                  'Prec@1 {avg_acc.avg:.3f}'.format(
+                      epoch, i, len(train_loader), batch_time = batch_time,
+                      data_time = data_time, avg_loss = avg_loss, avg_acc = avg_acc))
 
     return avg_acc, avg_loss
 

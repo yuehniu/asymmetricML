@@ -8,8 +8,8 @@ enclave {
         public void set_sgx_enclave(BOOL use_sgx);
         public void set_verbose_enclave(BOOL verbose);
         public void add_ReLU_ctx_enclave(int batchsize, int n_chnls, int H, int W);
-        public void ReLU_fwd_enclave([in] const float* in, [in, out] float* out, int lyr);
-        public void ReLU_bwd_enclave([in] const float* in, [in, out] float* gradin, int lyr);
+        public void ReLU_fwd_enclave([in] const float* in, [out] float* out, int lyr);
+        public void ReLU_bwd_enclave([in, out] float* gradin, int lyr);
     };
 
     untrusted {

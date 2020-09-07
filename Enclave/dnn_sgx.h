@@ -28,9 +28,9 @@ extern "C" {
     //ReLU interface
     void sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int batchsize, int n_chanls, int H, int W);
 
-    void sgx_ReLU_fwd(sgxContext* sgx_ctx, const float* in, float* out, int lyr);
+    void sgx_ReLU_fwd(sgxContext* sgx_ctx, float* in, float* out, int lyr);
 
-    void sgx_ReLU_bwd(sgxContext* sgx_ctx, const float* in, float* gradin, int lyr);
+    void sgx_ReLU_bwd(sgxContext* sgx_ctx, float* gradin, int lyr);
 }
 
 #endif //_DNN_SGX_H_

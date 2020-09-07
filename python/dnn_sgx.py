@@ -73,6 +73,7 @@ class sgxDNN(object):
             output_ptr = np.ctypeslib.as_ctypes(output.numpy().reshape(-1))
             self.lib.ReLU_fwd_bridge.argtypes = [c_uint, POINTER(c_float), POINTER(c_float), c_int]
             self.lib.ReLU_fwd_bridge(self.eid, input_ptr, output_ptr, self.lyr)
+            #output = np.maximum(output, 0)
 
         self.lyr += 1
         return output.reshape(input.size()).cuda()
@@ -88,10 +89,11 @@ class sgxDNN(object):
         if self.useSGX:
             pass
         else:
-            input_ptr = np.ctypeslib.as_ctypes(input.cpu().detach().numpy().reshape(-1))
+            #input_ptr = np.ctypeslib.as_ctypes(input.cpu().detach().numpy().reshape(-1))
             gradin_ptr = np.ctypeslib.as_ctypes(gradin.numpy().reshape(-1))
-            self.lib.ReLU_bwd_bridge.argtypes = [c_uint, POINTER(c_float), POINTER(c_float), c_int]
-            self.lib.ReLU_bwd_bridge(self.eid, input_ptr, gradin_ptr, self.lyr)
+            self.lib.ReLU_bwd_bridge.argtypes = [c_uint, POINTER(c_float), c_int]
+            self.lib.ReLU_bwd_bridge(self.eid, gradin_ptr, self.lyr)
+            #gradin = np.multiply(gradin, input.cpu().clone()>0)
 
         return gradin.reshape(gradout.size()).cuda()
 

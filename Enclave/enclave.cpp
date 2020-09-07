@@ -24,11 +24,11 @@ extern "C" {
         sgx_add_ReLU_ctx(&sgx_ctx, batchsize, n_chnls, H, W);
     }
 
-    void ReLU_fwd_enclave(const float* in, float* out, int lyr) {
+    void ReLU_fwd_enclave(float* in, float* out, int lyr) {
         sgx_ReLU_fwd(&sgx_ctx, in, out, lyr);
     }
 
-    void ReLU_bwd_enclave(const float* in, float* gradin, int lyr) {
-        sgx_ReLU_bwd(&sgx_ctx, in, gradin, lyr);
+    void ReLU_bwd_enclave(float* gradin, int lyr) {
+        sgx_ReLU_bwd(&sgx_ctx, gradin, lyr);
     }
 }
