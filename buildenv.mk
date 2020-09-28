@@ -128,10 +128,12 @@ COMMON_LDFLAGS := -Wl,-z,relro,-z,now,-z,noexecstack
 # will hide all symbols from dynamic symbol table even if they are marked
 # as `global' in the LD version script.
 ENCLAVE_CFLAGS   = -ffreestanding -nostdinc -fvisibility=hidden -fpie
+# ENCLAVE_CFLAGS   = -ffreestanding -fvisibility=hidden -fpie
 ifeq ($(CC_GREAT_EQUAL_8), 1)
     ENCLAVE_CFLAGS += -fcf-protection
 endif
 ENCLAVE_CXXFLAGS = $(ENCLAVE_CFLAGS) -nostdinc++
+# ENCLAVE_CXXFLAGS = $(ENCLAVE_CFLAGS)
 ENCLAVE_LDFLAGS  = $(COMMON_LDFLAGS) 
 
 RM = rm -f

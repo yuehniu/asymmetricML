@@ -85,7 +85,7 @@ def main():
 
     if args.sgx:
         # initilize SGX execution Obj
-        sgxdnn = sgxDNN(use_sgx=False, n_enclaves=1)
+        sgxdnn = sgxDNN(use_sgx=False, n_enclaves=1, batchsize=args.batch_size)
 
         # transform model
         model, need_sgx = transform_model(model, sgxdnn)

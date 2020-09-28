@@ -3,16 +3,25 @@ enclave {
     include "datatype.h"
 
     trusted {
-        public void init_enclave_ctx(int n_lyrs, BOOL use_sgx, BOOL verbose);
-        public void set_lyrs_enclave(int n_lyrs);
-        public void set_sgx_enclave(BOOL use_sgx);
-        public void set_verbose_enclave(BOOL verbose);
-        public void add_ReLU_ctx_enclave(int batchsize, int n_chnls, int H, int W);
-        public void ReLU_fwd_enclave([in] const float* in, [out] float* out, int lyr);
-        public void ReLU_bwd_enclave([in, out] float* gradin, int lyr);
+        public uint32_t init_enclave_ctx(int n_lyrs, BOOL use_sgx, int batchsize, BOOL verbose);
+        public uint32_t set_lyrs_enclave(int n_lyrs);
+        public uint32_t set_batchsize_enclave(int batchsize);
+        public uint32_t set_sgx_enclave(BOOL use_sgx);
+        public uint32_t set_verbose_enclave(BOOL verbose);
+
+        public uint32_t add_ReLU_ctx_enclave(int n_chnls, int H, int W);
+        public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr);
+        public uint32_t ReLU_bwd_enclave([user_check] float* gradin, int lyr);
+
+        public uint32_t add_ReLUPooling_ctx_enclave(int n_chnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int mode);
+        public uint32_t ReLUPooling_fwd_enclave([user_check] float* in, [user_check] float* out, int lyr, int lyr_pooling);
+        public uint32_t ReLUPooling_bwd_enclave([user_check] float* gradout, [user_check]float* gradin, int lyr, int lyr_pooling);
+        //public uint32_t ReLUPooling_fwd_enclave([in, count=in_size] float* in, [out, count=out_size] float* out, int lyr, int lyr_pooling, int in_size, int out_size);
+        //public uint32_t ReLUPooling_bwd_enclave([in, count=out_size] float* gradout, [out, count=in_size]float* gradin, int lyr, int lyr_pooling, int in_size, int out_size);
     };
 
     untrusted {
-        unsigned long int init_ctx_bridge(int n_lyrs, BOOL use_sgx, BOOL verbose);
+        unsigned long int init_ctx_bridge(int n_lyrs, BOOL use_sgx, int batchsize, BOOL verbose);
+        void ocall_print_string([in, string] const char *str);
     };
 };

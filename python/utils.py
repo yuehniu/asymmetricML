@@ -31,6 +31,7 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             out_dim_cur = in_dim_cur
             sgx_dnn.in_memory_desc[module] = in_dim_cur
             sgx_dnn.out_memory_desc[module] = out_dim_cur
+            sgx_dnn.lyr_config.append(None)
         elif isinstance(module, torch.nn.Conv2d):
             padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
             if len(dim_prev) == 0:
@@ -44,7 +45,8 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             sgx_dnn.in_memory_desc[module] = in_dim_cur
             out_dim_cur = [batchsize, module.out_channels, Ho, Wo]
             sgx_dnn.out_memory_desc[module] = out_dim_cur
-        elif isinstance(module, torch.nn.MaxPool2d):
+            sgx_dnn.lyr_config.append([module.in_channels, module.out_channels, kern_sz, stride, padding])
+        elif module.type == "asymReLUPooling" or isinstance(module, torch.nn.MaxPool2d):
             padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
             out_channels, Hi, Wi = dim_prev[1], dim_prev[2], dim_prev[3]
             Ho = np.floor((Hi + 2*padding - dilation*(kern_sz-1) - 1) / stride + 1)
@@ -54,6 +56,7 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             sgx_dnn.in_memory_desc[module] = in_dim_cur
             out_dim_cur = [batchsize, out_channels, Ho, Wo]
             sgx_dnn.out_memory_desc[module] = out_dim_cur
+            sgx_dnn.lyr_config.append([out_channels, kern_sz, stride, padding])
 
         dim_prev = out_dim_cur
 

@@ -38,6 +38,8 @@ SGX_COMMON_CXXFLAGS := $(SGX_COMMON_FLAGS) -Wnon-virtual-dtor -std=c++11
 Enclave_Include_Paths := -I$(SGX_SDK)/include -I$(SGX_SDK)/include/tlibc -I$(SGX_SDK)/include/libcxx -I../Include -I/usr/lib/gcc/x86_64-linux-gnu/7.5.0/include/ -I../Include/eigen3_sgx/
 
 Enclave_C_Flags := $(Enclave_Include_Paths) -nostdinc -fvisibility=hidden -fpie -ffunction-sections -fdata-sections -march=native
+APP_C_Flags := -fPIC -Wno-attributes -IApp -IInclude -I$(SGX_SDJ)/include
+# Enclave_C_Flags := $(Enclave_Include_Paths) -fvisibility=hidden -fpie -ffunction-sections -fdata-sections -march=native
 CC_BELOW_4_9 := $(shell expr "`$(CC) -dumpversion`" \< "4.9")
 ifeq ($(CC_BELOW_4_9), 1)
         Enclave_C_Flags += -fstack-protector
@@ -45,6 +47,7 @@ else
         Enclave_C_Flags += -fstack-protector-strong
 endif
 Enclave_Cpp_Flags := $(Enclave_C_Flags) -nostdinc++
+# Enclave_Cpp_Flags := $(Enclave_C_Flags)
 
 ifeq ($(LAv2), 1)
 	Enclave_C_Flags += -DSGX_USE_LAv2
@@ -65,8 +68,17 @@ clean:
 	@rm -f  $(ENCLAVE_NAME) $(SIGNED_ENCLAVE_NAME) *.o *_t.c *_t.h *_u.c *_u.h
 
 $(ENCLAVE_NAME): enclave_t.o $(ENCLAVE_CPP_OBJECTS)
-	@$(CXX) $^ -o $@ $(ENCLAVE_LINK_FLAGS) -fopenmp
+	@$(CXX) $^ -o $@ $(ENCLAVE_LINK_FLAGS) -pthread -fopenmp
 	@echo "LINK => $@"
+
+enclave_u.h: $(SGX_EDGER8R) enclave.edl
+	@$(SGX_EDGER8R) --trusted enclave.edl --search-path $(SGX_SDK)/include
+
+enclave_u.c: enclave_u.h
+
+enclave_u.o: enclave_u.c dnn_sgx.o
+	@$(CC) $(SGX_COMMON_CFLAGS) $(APP_C_Flags) -c $< -o $@
+	@echo "CC <= $<"
 
 enclave_t.h: $(SGX_EDGER8R) enclave.edl
 	@$(SGX_EDGER8R) --trusted enclave.edl --search-path $(SGX_SDK)/include
