@@ -10,9 +10,12 @@ struct conv_Config {
     int stride;
     int padding;
     int Hi, Wi, Ho, Wo;
+    int r;
 };
 struct relu_Config {
     int n_chnls;
+    int H, W;
+    int r;
 };
 struct relupooling_Config {
     int n_chnls;
@@ -21,6 +24,7 @@ struct relupooling_Config {
     int padding;
     int Hi, Wi, Ho, Wo;
     int mode;
+    int r;
 };
 
 union lyrConfig {

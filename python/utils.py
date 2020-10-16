@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 import math
 import numpy as np
-from .models import vgg16, vgg19
+from .models import vgg11, vgg16, vgg19
 
 def build_network(model_name, **kwargs):
     models = {
+        'vgg11': vgg11,
         'vgg16': vgg16,
         'vgg19': vgg19
     }
@@ -32,7 +33,7 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             sgx_dnn.in_memory_desc[module] = in_dim_cur
             sgx_dnn.out_memory_desc[module] = out_dim_cur
             sgx_dnn.lyr_config.append(None)
-        elif isinstance(module, torch.nn.Conv2d):
+        elif module.type == 'asymConv2D' or isinstance(module, torch.nn.Conv2d):
             padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
             if len(dim_prev) == 0:
                 Hi, Wi = dim_in[1], dim_in[2]
@@ -41,11 +42,12 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             Ho = np.floor((Hi + 2*padding[0] - dilation[0]*(kern_sz[0]-1) - 1) / stride[0] + 1)
             Wo = np.floor((Wi + 2*padding[1] - dilation[1]*(kern_sz[1]-1) - 1) / stride[1] + 1)
             Ho, Wo = int(Ho), int(Wo)
-            in_dim_cur = [batchsize, module.out_channels, Hi, Wi]
+            in_dim_cur = [batchsize, module.in_channels, Hi, Wi]
             sgx_dnn.in_memory_desc[module] = in_dim_cur
             out_dim_cur = [batchsize, module.out_channels, Ho, Wo]
             sgx_dnn.out_memory_desc[module] = out_dim_cur
-            sgx_dnn.lyr_config.append([module.in_channels, module.out_channels, kern_sz, stride, padding])
+            if module.type == 'asymConv2D':
+                sgx_dnn.lyr_config.append([module.in_channels, module.out_channels, kern_sz, stride, padding])
         elif module.type == "asymReLUPooling" or isinstance(module, torch.nn.MaxPool2d):
             padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
             out_channels, Hi, Wi = dim_prev[1], dim_prev[2], dim_prev[3]

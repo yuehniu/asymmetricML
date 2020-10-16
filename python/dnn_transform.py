@@ -16,7 +16,7 @@ Note:
 import torch
 import torch.nn as nn
 
-from .dnn_sgx import sgxReLU, sgxReLUPooling
+from .dnn_sgx import sgxReLU, sgxReLUPooling, sgxConv
 
 def transform_model(model, sgxdnn_Obj, use_SGX=True):
     print("[INFO] Transform model to the asymmetric version")
@@ -42,9 +42,13 @@ def transform_layer(m, sgxdnn_Obj, use_SGX):
     if isinstance(m, nn.Conv2d): #TODO
         print("[INFO] Convert convolutional layer")
         config = [m.in_channels, m.out_channels, m.kernel_size, m.stride,
-                  m.padding, m.dilation, m.groups, m.padding_mode]
-        new_m.append(nn.Conv2d(*config))
-        need_sgx.append(False)
+                  m.padding, m.dilation]
+        if m.in_channels == 3:
+            new_m.append(nn.Conv2d(*config))
+            need_sgx.append(False)
+        else:
+            new_m.append(asymConv2D(sgxdnn_Obj, *config))
+            need_sgx.append(True)
     elif isinstance(m, nn.BatchNorm2d):
         config = [m.num_features, m.eps, m.momentum]
         new_m.append(nn.BatchNorm2d(*config))
@@ -70,6 +74,27 @@ def transform_layer(m, sgxdnn_Obj, use_SGX):
         need_sgx.append(False)
 
     return new_m, need_sgx
+
+class asymConv2D(nn.Module):
+    def __init__(self, sgxdnn_Obj, n_ichnls, n_ochnls, kernel_size, stride, padding, dilation):
+        super(asymConv2D, self).__init__()
+        self.sgxdnn = sgxdnn_Obj
+        self.in_channels = n_ichnls
+        self.out_channels = n_ochnls
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.type = "asymConv2D"
+
+        self.weight = nn.Parameter(torch.Tensor(n_ochnls, n_ichnls, kernel_size[0], kernel_size[1]))
+        self.bias = nn.Parameter(torch.Tensor(n_ochnls))
+
+        self.weight.data.uniform_(-0.1, 0.1)
+        self.bias.data.uniform_(-0.1, 0.1)
+
+    def forward(self, input):
+        return sgxConv.apply(input, self.weight, self.bias, self.sgxdnn)
 
 class asymReLU(nn.Module):
     def __init__(self, sgxdnn_Obj):

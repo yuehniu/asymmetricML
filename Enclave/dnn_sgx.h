@@ -22,6 +22,7 @@ struct sgxContext {
     std::vector<float *> bottom = {};
     std::vector<float *> top = {};
     std::vector<int *> max_index = {};
+    std::vector<int> n_pchanls = {};
 };
 
 extern "C" {
@@ -30,6 +31,11 @@ extern "C" {
     ATTESTATION_STATUS sgx_set_batchsize(sgxContext* sgx_ctx, int batchsize);
     ATTESTATION_STATUS sgx_set_sgx(sgxContext* sgx_ctx, BOOL use_sgx);
     ATTESTATION_STATUS sgx_set_verbose(sgxContext* sgx_ctx, BOOL verbose);
+
+    //Conv interface
+    ATTESTATION_STATUS sgx_add_Conv_ctx(sgxContext* sgx_ctx, int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r);
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr);
+    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr);
 
     //ReLU interface
     ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chanls, int H, int W);
@@ -44,6 +50,12 @@ extern "C" {
     ATTESTATION_STATUS sgx_ReLUPooling_fwd(sgxContext* sgx_ctx, float* in, float* out, int lyr, int lyr_pooling);
     
     ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float*gradout, float* gradin, int lyr, int lyr_pooling);
+
+    //SVD
+    void sgx_light_SVD(float* in, 
+                       float* u_T, int u_len, 
+                       float* v_T, int v_len, 
+                       int r, int max_iter);
 
     int printf(const char* fmt, ...);
 }

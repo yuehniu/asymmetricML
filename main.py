@@ -35,7 +35,7 @@ from python.dnn_transform import transform_model
 from python.dnn_sgx import sgxDNN
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='vgg16', type=str, help='model name')
+parser.add_argument('--model', default='vgg11', type=str, help='model name')
 parser.add_argument('--device', default='gpu', type=str, choices=['gpu', 'cpu'], help='untrusted platform')
 parser.add_argument('--sgx', action='store_true', help='whether or not use sgx')
 parser.add_argument('--dataset', default='cifar10', type=str)
@@ -85,7 +85,7 @@ def main():
 
     if args.sgx:
         # initilize SGX execution Obj
-        sgxdnn = sgxDNN(use_sgx=False, n_enclaves=1, batchsize=args.batch_size)
+        sgxdnn = sgxDNN(use_sgx=True, n_enclaves=1, batchsize=args.batch_size)
 
         # transform model
         model, need_sgx = transform_model(model, sgxdnn)

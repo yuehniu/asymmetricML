@@ -16,6 +16,9 @@
 
 #define USE_EIGEN_TENSOR
 
+#define MAX(a, b) ( (a)>(b) ? (a) : (b) )
+#define MIN(a, b) ( (a)<(b) ? (a) : (b) )
+
 extern "C" {
     ATTESTATION_STATUS sgx_init_ctx(sgxContext* sgx_ctx, int n_lyrs, BOOL use_sgx, int batchsize, BOOL verbose) {
         sgx_ctx->nLyrs = n_lyrs;
@@ -53,14 +56,257 @@ extern "C" {
         return SUCCESS;
     }
 
+    ATTESTATION_STATUS sgx_add_Conv_ctx(sgxContext* sgx_ctx, int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r){
+        conv_Config* conv_conf = ( conv_Config* )malloc( sizeof( conv_Config) );
+        conv_conf->n_ichnls = n_ichnls;
+        conv_conf->n_ochnls = n_ochnls;
+        conv_conf->sz_kern = sz_kern;
+        conv_conf->stride = stride;
+        conv_conf->padding = padding;
+        conv_conf->Hi = Hi; conv_conf->Wi = Wi;
+        conv_conf->Ho = Ho; conv_conf->Wo = Wo;
+        conv_conf->r = r;
+        lyrConfig* lyr_conf = ( lyrConfig* )malloc( sizeof( lyrConfig ) );
+        lyr_conf->conv_conf = conv_conf;
+        sgx_ctx->config.push_back(lyr_conf);
+
+        int batchsize = sgx_ctx->batchsize;
+        int sz_u_T = n_ichnls; int sz_v_T = Hi * Wi;
+        int sz_in = batchsize * r * ( sz_u_T + sz_v_T );
+        int sz_out = batchsize * n_ochnls * Ho * Wo;
+        auto in_ptr = ( float* )malloc( sizeof(float) * sz_in );
+        auto out_ptr = ( float* )malloc( sizeof(float) * sz_out );
+        if (!in_ptr || !out_ptr) {
+            return MALLOC_ERROR;
+        }
+        sgx_ctx->bottom.push_back( in_ptr ); sgx_ctx->top.push_back( out_ptr );
+        sgx_ctx->sz_bottom.push_back( sz_in ); sgx_ctx->sz_top.push_back( sz_out );
+
+        return SUCCESS;
+    }
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr){
+        lyrConfig* lyr_conf = sgx_ctx->config.at(lyr);
+        conv_Config* conv_conf = lyr_conf->conv_conf;
+        int batchsize = sgx_ctx->batchsize;
+        int n_ichnls = conv_conf->n_ichnls; int n_ochnls = conv_conf->n_ochnls;
+        int sz_kern = conv_conf->sz_kern;
+        int sz_kern2 = sz_kern * sz_kern;
+        int r = conv_conf->r;
+        int sz_w = n_ochnls * r * sz_kern * sz_kern;
+
+        //re-arrange kernels
+        float* w_T = ( float* )malloc( sizeof(float) * batchsize * sz_w );
+        //std::memset( w_T, 0, sizeof(float) * batchsize * sz_w );
+        float* u_T = sgx_ctx->bottom.at(lyr);
+        float* w_T_oc = w_T;
+        float* w_oc = w;
+        for ( int i = 0; i < batchsize*sz_w; i++ ) {
+            *( w_T+i ) = 0.0;
+        }
+        #pragma omp parallel
+        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+            w_oc = w;
+            for( int oc_ = 0; oc_ < n_ochnls; oc_++ ){
+                for ( int r_ = 0; r_ < r; r_++ ) {
+                    float* w_T_r = w_T_oc + ( r_ * sz_kern2 ); 
+                    float* u_T_r = u_T + ( r_ * n_ichnls );
+                    for ( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
+                        float* w_r = w_oc + ( ic_ * sz_kern2 );
+                        float u_ij = *( u_T_r + ic_ );
+                        for ( int k = 0; k < sz_kern2; k++ ) {
+                            *( w_T_r+k ) += u_ij * ( *(w_r+k) );
+                        } } } 
+                w_T_oc += ( r * sz_kern2 );
+                w_oc += ( n_ichnls * sz_kern2 );
+            } 
+            u_T += ( r * n_ichnls );
+        }
+
+        //->Debug
+        /*for ( int b_ = 0; b_ < 1; b_++ ) {
+            for ( int oc_ = 0; oc_ < 1; oc_++ ) {
+                for ( int r_ = 1; r_ < 2; r_++ ) {
+                    std::string s0 = std::to_string(b_) + "-" + std::to_string(oc_) + "-" + std::to_string(r_) + "\n";
+                    printf(s0.c_str());
+                    for ( int k1 = 0; k1 < sz_kern; k1++ ) {
+                        for ( int k2 = 0; k2 < sz_kern; k2++ ) {
+                            int i = ( b_*n_ochnls*r + oc_*r + r_)*sz_kern2 + k1* sz_kern + k2;
+                            std::string s = std::to_string( *( w_T+i ) );
+                            s = s + "\t";
+                            const char* mess = s.c_str();
+                            printf(mess);
+                        }
+                        printf("\n");
+                    }
+                    printf("\n");
+                }
+            }
+        }*/
+        //->End Debug
+
+        //convolution forward
+        float* out = sgx_ctx->top.at( lyr );
+        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
+        int Wo = conv_conf->Wo; int Ho = conv_conf->Ho;
+        int Wi = conv_conf->Wi; int Hi = conv_conf->Hi;
+        int stride = conv_conf->stride;
+        int padding = conv_conf->padding;
+        #pragma omp parallel
+        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+            for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
+                float* w_b = w_T + ( b_*n_ochnls*r + oc_*r ) * sz_kern2;
+                float* out_oc = out + ( b_*n_ochnls + oc_ ) * Wo * Ho;
+                for ( int ho_ = 0; ho_ < Ho; ho_++ ) {
+                    for ( int wo_ = 0; wo_ < Wo; wo_++ ) {
+                        float out_ij = 0.0;
+                        int in_left = wo_ * stride - padding;
+                        int w_left_beg = MAX( 0, -in_left );
+                        int in_right = in_left+sz_kern;
+                        in_left = MAX( 0, in_left );
+                        in_right = MIN( Wi, in_right );
+                        int in_top = ho_ * stride - padding;
+                        int w_top_beg = MAX( 0, -in_top );
+                        int in_bottom = in_top+sz_kern;
+                        in_top = MAX( 0, in_top );
+                        in_bottom = MIN( Hi, in_bottom );
+                        for ( int r_ = 0; r_ < r; r_++ ) {
+                            float* in_r = in + ( b_*r + r_ ) * Hi * Wi;
+                            float* w_r = w_b + ( r_ * sz_kern2 );
+                            int w_top = w_top_beg;
+                            int w_left = w_left_beg;
+                            for ( int hi_ = in_top; hi_ < in_bottom; hi_++ ) {
+                                for ( int wi_ = in_left; wi_ < in_right; wi_++ ) {
+                                    float w_ij = *( w_r + w_top*sz_kern + w_left );
+                                    float in_ij = *( in_r + hi_*Wi + wi_ ); 
+                                    out_ij += ( w_ij * in_ij );
+
+                                    w_left++;
+                                    //if ( b_ == 0 && oc_ == 0 && ho_==0 && wo_==0 && r_==1 ) {
+                                    //    std::string s = std::to_string(w_ij) + ":" + std::to_string(in_ij);
+                                    //    s = s + "\n";
+                                    //    const char* message = s.c_str();
+                                    //    printf(message);
+                                    //}
+                                } 
+                                w_left = w_left_beg;
+                                w_top++;
+                                } }
+                        *( out_oc + ho_*Wo + wo_ ) = out_ij;
+                        //std::string s = std::to_string(b_)+ "-" + 
+                        //                std::to_string(oc_) + "-" + 
+                        //                std::to_string(ho_) + "-" + 
+                        //                std::to_string(wo_);
+                    } } } }
+        free( w_T );
+        return SUCCESS;
+    }
+
+    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr) {
+        lyrConfig* lyr_conf = sgx_ctx->config.at(lyr);
+        conv_Config* conv_conf = lyr_conf->conv_conf;
+        int batchsize = sgx_ctx->batchsize;
+        int r = conv_conf->r;
+        int sz_kern = conv_conf->sz_kern;
+        int n_ochnls = conv_conf->n_ochnls;
+        int n_ichnls = conv_conf->n_ichnls;
+        int Hi = conv_conf->Hi; int Wi = conv_conf->Wi;
+        int Ho = conv_conf->Ho; int Wo = conv_conf->Wo;
+        int stride = conv_conf->stride; int padding = conv_conf->padding;
+        float* u_T = sgx_ctx->bottom.at( lyr );
+        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
+        int sz_w = n_ochnls * r * sz_kern * sz_kern;
+        float* dw_T = ( float* )malloc( sizeof(float) * batchsize * sz_w );
+
+        //convolution backward
+        #pragma omp parallel
+        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+            for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
+                for ( int r_ = 0; r_ < r; r_++ ) {
+                    float* dw_T_r = dw_T + ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern;
+                    for ( int i = 0; i < sz_kern; i++ ) {
+                        for ( int j = 0; j < sz_kern; j++ ) {
+                            float dw_ij = 0.0;
+
+                            int in_left = j * stride - padding;
+                            int out_left_beg = MAX( 0, -in_left);
+                            int in_right = in_left + Wi;
+                            in_left = MAX( 0, in_left );
+                            in_right = MIN( Wi, in_right );
+                            
+                            int in_top = i * stride - padding;
+                            int out_top_beg = MAX( 0, -in_top );
+                            int in_bottom = in_top + Hi;
+                            in_top = MAX( 0, in_top );
+                            in_bottom = MIN( Hi, in_bottom );
+
+                            float* dout_b = gradout + ( b_*n_ochnls + oc_ ) * Ho * Wo;
+                            float* in_b = in + ( b_*r + r_ ) * Hi * Wi;
+                            int out_left = out_left_beg; int out_top = out_top_beg;
+                            for ( int hi_ = in_top; hi_ < in_bottom; hi_++ ) {
+                                for ( int wi_ = in_left; wi_ < in_right; wi_++ ) {
+                                    float dout_ij = *( dout_b + out_top*Wo + out_left );
+                                    float in_ij = *( in_b + hi_*Wi + wi_);
+                                    dw_ij += ( in_ij * dout_ij );
+
+                                    out_left++;
+                                }
+                                out_left = out_left_beg;
+                                out_top++;
+                            } 
+
+                            *( dw_T_r + i*sz_kern + j ) = dw_ij;
+                        } } } } }
+        //for( int k1 = 0; k1 < sz_kern; k1++ ) {
+        //    for ( int k2 = 0; k2 < sz_kern; k2++ ) {
+        //        int b_ = 2; int oc_ = 0; int r_ = 0;
+        //        float* dw_T_r = dw_T + ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern;
+        //        std::string s = std::to_string( *(dw_T_r + k1*sz_kern + k2) ) + "\t";
+        //        printf(s.c_str());
+        //    }
+        //    printf("\n");
+        //}
+
+        //re-arrange gradients
+        #pragma omp parallel
+        for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
+            for( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
+                for ( int i = 0; i < sz_kern; i++ ) {
+                    for ( int j = 0; j < sz_kern; j++ ) {
+                        float dw_ij = 0.0;
+                        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+                            for ( int r_ = 0; r_ < r; r_++ ) {
+                                int dw_pos = ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern + i * sz_kern + j;
+                                int u_pos = ( b_*n_ichnls*r + r_*n_ichnls + ic_ );
+                                float u_ij = *( u_T + u_pos );
+                                float dw_T_ij = *( dw_T + dw_pos );
+                                dw_ij += ( u_ij * dw_T_ij );
+
+                                //if (b_ == 2 && oc_ == 0 && ic_ == 0 && i == 0 && j == 0) {
+                                //    std::string s = std::to_string(u_ij) + " - " + std::to_string(dw_T_ij) + "\n"; 
+                                //    printf(s.c_str());
+                                //}
+                            }
+                        }
+                        int dw_pos = ( oc_*n_ichnls + ic_ ) * sz_kern * sz_kern + i*sz_kern + j;
+                        *( gradw + dw_pos ) = dw_ij;
+                    }
+                }
+            }
+        }
+
+        free( dw_T );
+        return SUCCESS;
+    }
+
     ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chnls, int H, int W) {
         relu_Config* relu_conf = ( relu_Config* )malloc( sizeof( relu_Config ) );
 	relu_conf->n_chnls = n_chnls;
+        relu_conf->H = H; relu_conf->W = W;
         lyrConfig* lyr_conf = ( lyrConfig* )malloc( sizeof( lyrConfig ) );
         lyr_conf->relu_conf = relu_conf;
 	sgx_ctx->config.push_back(lyr_conf);
-        int batchsize = sgx_ctx->batchsize;
 
+        int batchsize = sgx_ctx->batchsize;
         int size = batchsize * n_chnls * H * W;
         auto in_ptr = (float*) malloc(sizeof(float) * size);
         auto out_ptr = (float*) malloc(sizeof(float) * size);
@@ -81,22 +327,83 @@ extern "C" {
         //s = s + "\n";
         //const char* message = s.c_str();
         //printf(message);
-	// Merge input
-	float* in_sgx = sgx_ctx->bottom.at(lyr);
+
+	//-> Merge input
+	float* in_sgx = sgx_ctx->bottom.at( lyr );
+        float* out_sgx = NULL;
+        if ( lyr > 0) {
+            out_sgx = sgx_ctx->top.at( lyr-1 );
+        }
 	for (int i = 0; i < size; i++){
-	    *(in_sgx+i) = *(out + i);
+            if ( lyr > 0 )
+	        *(in_sgx+i) = *(out + i) + *( out_sgx + i );
+            else
+	        *(in_sgx+i) = *(out + i);
 	}
 
+        //-> Apply ReLU op
         //auto in_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(in_sgx, size);
         //auto out_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(out, size);
-        #pragma omp parallel
+        //#pragma omp parallel
         for (int i = 0; i < size; i++) {
-             if (*(in_sgx+i) < 0.0) *(out+i) = 0.0;
+             if (*(in_sgx+i) < 0.0) 
+                 *(out+i) = 0.0;
+             else 
+                 *(out+i) = *(in_sgx+i);
         }
+
 	//Eigen::Tensor<float, 1> out_map = in_map.cwiseMax(static_cast<float>(0));
         //out = out_map.data();
         //char message[] = "[SGX:Trusted+] Call ReLU FWD\n";
         //printf(message);
+
+        //-> Resplit data using light-weight SVD
+        int batchsize = sgx_ctx->batchsize;
+        lyrConfig* lyr_conf = sgx_ctx->config.at( lyr+1 );
+        int n_chnls = lyr_conf->conv_conf->n_ichnls;
+        //number of principle components in current layer
+        int r = lyr_conf->conv_conf->r;
+        int sz_u_T = lyr_conf->conv_conf->n_ichnls;
+        float* u_T = sgx_ctx->bottom.at( lyr+1 );
+        int sz_v_T = lyr_conf->conv_conf->Hi * lyr_conf->conv_conf->Wi;
+        float* v_T = sgx_ctx->bottom.at( lyr+1 ) + ( batchsize * r * sz_u_T );
+        //Initialize u_T and v_T
+        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+            float* out_b  = out + ( b_ * n_chnls * sz_v_T);
+            for ( int r_ = 0; r_ < r; r_++ ) {
+                float* u_T_r = u_T + ( (b_*r + r_ ) * sz_u_T );
+                for ( int iu = 0; iu < sz_u_T; iu++ ) {
+                    *( u_T_r + iu ) = 1.0;
+                }
+                float* v_T_r = v_T + ( (b_*r + r_) * sz_v_T );
+                for ( int iv = 0; iv < sz_v_T; iv++ ) {
+                    *( v_T_r + iv ) = *( out_b + (r_ * sz_v_T) + iv );
+                }
+            }
+        }
+
+        float* u_ptr = u_T;
+        float* v_ptr = v_T;
+        float* out_ptr = out;
+        lyr_conf = sgx_ctx->config.at( lyr );
+        lyr_conf->relu_conf->r = r;
+        int H = lyr_conf->relu_conf->H; int W = lyr_conf->relu_conf->W;
+        for( int b_ = 0; b_ < batchsize; b_++ ) {
+            sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
+            
+            //if ( b_ == 1 ) {
+            //    for ( int i = 0; i < 32; i++ ) {
+            //        std::string s = std::to_string( *(out_ptr+(0*sz_v_T)+i)) + "\n";
+            //        printf(s.c_str());
+            //    }
+            //}
+
+            u_ptr += r * sz_u_T;
+            v_ptr += r * sz_v_T;
+            out_ptr += ( n_chnls * H * W );
+        }
+
+
         return SUCCESS;
     }
 
@@ -160,14 +467,22 @@ extern "C" {
         int sz_kern = relupooling_conf->sz_kern;
         int stride = relupooling_conf->stride;
         int mode = relupooling_conf->mode;
-        // Merge input (no input from trusted execution yet)
+
+        //-> Merge input 
 	float* in_sgx = sgx_ctx->bottom.at(lyr);
+        float* out_prev_sgx = NULL;
+        if ( lyr > 0 ) {
+            out_prev_sgx = sgx_ctx->top.at( lyr-1 );
+        }
 	int* max_indx_ptr = sgx_ctx->max_index.at(lyr_pooling);
-	for ( int i = 0; i < sz_in; i++ )
-            *(in_sgx + i) = *(in + i);
-        float* out_ptr = out;
+	for ( int i = 0; i < sz_in; i++ ) {
+            if ( lyr > 0 )
+                *(in_sgx + i) = *(in + i) + *(out_prev_sgx + i);
+            else
+                *(in_sgx + i) = *(in + i);
+        }
         int batchsize = sgx_ctx->batchsize;
-	
+
         //int i = 0;
         #pragma omp parallel
         for ( int b_ = 0; b_ < batchsize; b_++ ){
@@ -201,6 +516,43 @@ extern "C" {
                         //i = i+1;
 		    } } } }
 
+        //Resplit data using light-weight SVD
+        if ( lyr != sgx_ctx->config.size()-1 ){
+            lyrConfig* lyr_conf = sgx_ctx->config.at( lyr+1 );
+            int r = lyr_conf->conv_conf->r;
+            int sz_u_T = lyr_conf->conv_conf->n_ichnls;
+            float* u_T = sgx_ctx->bottom.at( lyr+1 );
+            int sz_v_T = lyr_conf->conv_conf->Hi * lyr_conf->conv_conf->Wi;
+            float* v_T = sgx_ctx->bottom.at( lyr+1 ) + ( batchsize * r * sz_u_T );
+            float* out_ptr = out;
+            //TODO: Initialize u_T and v_T
+            for ( int b_ = 0; b_ < batchsize; b_++ ) {
+                float* out_b  = out_ptr + ( b_ * n_chnls * sz_v_T);
+                for ( int r_ = 0; r_ < r; r_++ ) {
+                    float* u_T_r = u_T + ( (b_*r + r_ ) * sz_u_T );
+                    for ( int iu = 0; iu < sz_u_T; iu++ ) {
+                        *( u_T_r + iu ) = 1.0;
+                    }
+                    float* v_T_r = v_T + ( (b_*r + r_) * sz_v_T );
+                    for ( int iv = 0; iv < sz_v_T; iv++ ) {
+                        *( v_T_r + iv ) = *( out_b + (r_ * sz_v_T) + iv );
+                    }
+                }
+            }
+
+            lyr_conf = sgx_ctx->config.at( lyr );
+            lyr_conf->relupooling_conf->r = r;
+            float* u_ptr = u_T;
+            float* v_ptr = v_T;
+            for( int b_ = 0; b_ < batchsize; b_++ ) {
+                u_ptr = u_T + ( b_ * r * sz_u_T );
+                v_ptr = v_T + ( b_ * r * sz_v_T );
+                out_ptr = out + ( b_ * n_chnls * Ho * Wo );
+
+                sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
+            }
+        }
+
         return SUCCESS;
     }
     ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float* gradout, float* gradin, int lyr, int lyr_pooling) {
@@ -228,6 +580,71 @@ extern "C" {
                                *(gradin + offset1 + cur_indx) = *(gradout + offset3); 
                        } } } }
         return SUCCESS;
+    }
+
+    /*
+     * Light-weight SVD to extract trusted/untrusted part from input
+     * 
+     * @param in Pointer to input tensor
+     * @param u_T List of pointers to trusted 'u'
+     * @param u_len Length of each vector 'u'
+     * @param v_T List of pointer to trusted 'v'
+     * @param v_len Length of each vector 'v'
+     * @param r Number of principle chananels in trusted platform
+     * @param max_iter Max number of iterations for alternating optimization
+    */
+    void sgx_light_SVD(float* in, 
+                       float* u_T, int u_len, 
+                       float* v_T, int v_len, 
+                       int r, int max_iter)
+    {
+        for ( int r_=0; r_<r; r_++ ) {
+            float* u = u_T + ( r_ * u_len );
+            float* v = v_T + ( r_ * v_len );
+            //Alternating optimization
+            for ( int iter=0; iter<max_iter; iter++ ) {
+                // compute u
+                float v_norm = 0.0;
+                for ( int i=0; i<v_len; i++) {
+                    float v_i = *( v+i );
+                    v_norm += ( v_i * v_i);
+                }
+                for ( int i = 0; i < u_len; i++ ) {
+                    float u_i = 0.0;
+                    for ( int j = 0; j < v_len; j++ ) {
+                        float X_ij = *( in + i*v_len + j);
+                        float v_j = *( v + j );
+                        u_i += ( X_ij * v_j );
+                    }
+                    *( u+i ) = u_i / v_norm;
+                }
+
+                // computer v
+                float u_norm = 0.0;
+                for ( int i = 0; i < u_len; i++ ) {
+                    float u_i = *( u+i );
+                    u_norm += ( u_i * u_i );
+                }
+                for ( int j = 0; j < v_len; j++) {
+                    float v_j = 0.0;
+                    for ( int i = 0; i < u_len; i++ ) {
+                        float X_ij = *( in + i*v_len + j );
+                        float u_i = *( u+i );
+                        v_j += ( X_ij * u_i );
+                    }
+                    *( v+j ) = v_j / u_norm;
+                }
+            }
+
+            // remove r-th principle channel from input
+            for ( int i = 0; i < u_len; i++ ) {
+                for ( int j = 0; j < v_len; j++ ) {
+                    float X_ij = *( in + i*v_len + j );
+                    X_ij -= ( *(u+i) * *(v+j) );
+                    *( in + i*v_len +j ) = X_ij;
+                }
+            }
+        }
     }
 
     int printf(const char* fmt, ...) {
