@@ -36,16 +36,16 @@ extern "C" {
         return sgx_add_Conv_ctx(&sgx_ctx, n_ichnls, n_ochnls, sz_kern, stride, padding, Hi, Wi, Ho, Wo, r);
     }
 
-    uint32_t Conv_fwd_enclave(float *w, int lyr) {
-        uint32_t status = sgx_Conv_fwd( &sgx_ctx, w, lyr );
+    uint32_t Conv_fwd_enclave(float *w, int lyr, int b_beg, int b_end) {
+        uint32_t status = sgx_Conv_fwd( &sgx_ctx, w, lyr, b_beg, b_end );
 
         //char message[] = "[SGX:Trusted] Call Conv FWD\n";
         //printf(message);
         return status;
     }
     
-    uint32_t Conv_bwd_enclave( float* gradout, float* gradw, int lyr ) {
-        uint32_t status = sgx_Conv_bwd( &sgx_ctx, gradout, gradw, lyr );
+    uint32_t Conv_bwd_enclave( float* gradout, float* gradw, int lyr, int c_beg, int c_end ) {
+        uint32_t status = sgx_Conv_bwd( &sgx_ctx, gradout, gradw, lyr, c_beg, c_end );
 
         return status;
     }
@@ -56,16 +56,16 @@ extern "C" {
         return sgx_add_ReLU_ctx(&sgx_ctx, n_chnls, H, W);
     }
 
-    uint32_t ReLU_fwd_enclave(float* out, int lyr) {
+    uint32_t ReLU_fwd_enclave(float* out, int lyr, int b_beg, int b_end) {
         //char message[] = "[SGX:Trusted] Call ReLU FWD\n";
         //printf(message);
-        uint32_t status = sgx_ReLU_fwd(&sgx_ctx, out, lyr);
+        uint32_t status = sgx_ReLU_fwd(&sgx_ctx, out, lyr, b_beg, b_end);
 
         return status;
     }
 
-    uint32_t ReLU_bwd_enclave(float* gradin, int lyr) {
-        return sgx_ReLU_bwd(&sgx_ctx, gradin, lyr);
+    uint32_t ReLU_bwd_enclave(float* gradin, int lyr, int b_beg, int b_end) {
+        return sgx_ReLU_bwd(&sgx_ctx, gradin, lyr, b_beg, b_end);
     }
 
     uint32_t add_ReLUPooling_ctx_enclave(int n_chnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int mode) {
@@ -74,14 +74,14 @@ extern "C" {
         return sgx_add_ReLUPooling_ctx(&sgx_ctx, n_chnls, sz_kern, stride, padding, Hi, Wi, Ho, Wo, mode);
     }
 
-    uint32_t ReLUPooling_fwd_enclave(float* in, float* out, int lyr, int lyr_pooling) {
+    uint32_t ReLUPooling_fwd_enclave(float* in, float* out, int lyr, int lyr_pooling, int b_beg, int b_end ) {
         //char message[] = "[SGX:Trusted] Call ReLUPooling FWD\n";
         //printf(message);
-        return sgx_ReLUPooling_fwd(&sgx_ctx, in, out, lyr, lyr_pooling);
+        return sgx_ReLUPooling_fwd(&sgx_ctx, in, out, lyr, lyr_pooling, b_beg, b_end);
     }
 
-    uint32_t ReLUPooling_bwd_enclave(float* gradout, float* gradin, int lyr, int lyr_pooling) {
-        return sgx_ReLUPooling_bwd(&sgx_ctx, gradout, gradin, lyr, lyr_pooling);
+    uint32_t ReLUPooling_bwd_enclave(float* gradout, float* gradin, int lyr, int lyr_pooling, int b_beg, int b_end) {
+        return sgx_ReLUPooling_bwd(&sgx_ctx, gradout, gradin, lyr, lyr_pooling, b_beg, b_end);
     }
 
     void test_light_SVD_enclave(float* in, 
@@ -92,108 +92,100 @@ extern "C" {
         sgx_light_SVD(in, u_T, u_len, v_T, v_len, r, max_iter);
     }
 
-    void test_Conv_fwd_enclave(float* in, float* w, float* out) {
-        // init sgx context
-        sgx_ctx.batchsize = 8;
-        sgx_ctx.useSGX = 1;
-        sgx_ctx.verbose = 1;
-        int n_ichnls = 16;
-        int n_ochnls = 16;
-        int sz_kern = 3;
-        int stride = 1;
-        int padding = 1;
-        int Hi = 32; int Wi = 32;
-        int Ho = 32; int Wo = 32;
-        int r = 4;
-
-        sgx_add_Conv_ctx(&sgx_ctx, n_ichnls, n_ochnls, sz_kern, stride, padding, Hi, Wi, Ho, Wo, r);
-
+    void test_Conv_fwd_enclave(float* in, float* w, float* out, int b_beg, int b_end ) {
         float* in_sgx = sgx_ctx.bottom.at(0);
-        int sz_in = sgx_ctx.sz_bottom.at(0);
-        for( int i = 0; i < sz_in; i++ ) {
+        //int sz_in = sgx_ctx.sz_bottom.at(0);
+        lyrConfig* lyr_conf = sgx_ctx.config.at( 0 );
+        int n_ichnls = lyr_conf->conv_conf->n_ichnls;
+        int Hi = lyr_conf->conv_conf->Hi; int Wi = lyr_conf->conv_conf->Wi;
+        int beg = b_beg * n_ichnls * Hi * Wi;
+        int end = b_end * n_ichnls * Hi * Wi;
+        for( int i = beg; i < end; i++ ) {
             *( in_sgx+i ) = *( in+i );
         }
 
-        sgx_Conv_fwd( &sgx_ctx, w, 0 );
+        sgx_Conv_fwd( &sgx_ctx, w, 0, b_beg, b_end );
 
         float* out_sgx = sgx_ctx.top.at( 0 );
         int sz_out = sgx_ctx.sz_top.at( 0 );
-        for( int i = 0; i < sz_out; i++ ) {
+        int n_ochnls = lyr_conf->conv_conf->n_ochnls;
+        int Ho = lyr_conf->conv_conf->Ho; int Wo = lyr_conf->conv_conf->Wo;
+        beg = b_beg * n_ochnls * Ho * Wo; end = b_end * n_ochnls * Ho * Wo;
+        for( int i = beg; i < end; i++ ) {
             *( out+i ) = *( out_sgx+i );
         }
     }
 
-    void test_Conv_bwd_enclave(float* gradout, float* gradw) {
+    void test_Conv_bwd_enclave(float* gradout, float* gradw, int c_beg, int c_end ) {
         int lyr = 0;
 
-        sgx_Conv_bwd( &sgx_ctx, gradout, gradw, lyr );
+        sgx_Conv_bwd( &sgx_ctx, gradout, gradw, lyr, c_beg, c_end );
     }
 
-    void test_ReLU_fwd_enclave(float *in_sgx, float* in_gpu, float* u_T, float* v_T, int batchsize, int n_chnls, int H, int W, int lyr, int r) {
-        //-> init sgx context
-        sgx_ctx.batchsize = batchsize;
-        sgx_ctx.useSGX = 1; sgx_ctx.verbose = 1;
-        // first add a pseudo conv context
-        sgx_add_Conv_ctx( &sgx_ctx, n_chnls, n_chnls, 3, 1, 1, H, W, H, W, r);
-
-        sgx_add_ReLU_ctx( &sgx_ctx, n_chnls, H, W );
-        
-        // last add a pseudo conv context
-        sgx_add_Conv_ctx( &sgx_ctx, n_chnls, n_chnls, 3, 1, 1, H, W, H, W, r);
-
+    void test_ReLU_fwd_enclave(float *in_sgx, float* in_gpu, float* u_T, float* v_T, int b_beg, int b_end) {
         //-> init in_sgx
-        int sz_top_prev = sgx_ctx.sz_top.at( lyr-1 );
-        float* top_prev = sgx_ctx.top.at( lyr-1 );
-        for ( int i = 0; i < sz_top_prev; i++ ) {
+        int sz_top_prev = sgx_ctx.sz_top.at( 0 );
+        float* top_prev = sgx_ctx.top.at( 0 );
+        lyrConfig*  lyr_conf = sgx_ctx.config.at( 0 );
+        int n_chnls = lyr_conf->conv_conf->n_ochnls;
+        int H = lyr_conf->conv_conf->Ho; int W = lyr_conf->conv_conf->Wo;
+        int beg = b_beg * n_chnls * H * W;
+        int end = b_end * n_chnls * H * W;
+        for ( int i = beg; i < end; i++ ) {
             *( top_prev + i ) = *( in_sgx + i );
         }
 
         //-> ReLU FWD
-        sgx_ReLU_fwd( &sgx_ctx, in_gpu, lyr);
+        sgx_ReLU_fwd( &sgx_ctx, in_gpu, 1, b_beg, b_end);
 
-        int sz_u_T = batchsize * r * n_chnls;
-        int sz_v_T = batchsize * r * H * W;
-        float* u_sgx = sgx_ctx.bottom.at( lyr+1 );
-        float* v_sgx = sgx_ctx.bottom.at( lyr+1 ) + (sz_u_T);
-        for ( int i = 0; i < sz_u_T; i++ ) {
+        lyr_conf = sgx_ctx.config.at( 1 );
+        int r = lyr_conf->relu_conf->r;
+        int sz_u_T = sgx_ctx.batchsize * r * n_chnls;
+        float* u_sgx = sgx_ctx.bottom.at( 2 );
+        float* v_sgx = sgx_ctx.bottom.at( 2 ) + (sz_u_T);
+        beg = b_beg * r * n_chnls;
+        end = b_end * r * n_chnls;
+        for ( int i = beg; i < end; i++ ) {
             *( u_T+i ) = *( u_sgx + i ); 
         }
-        for ( int i = 0; i < sz_v_T; i++ ) {
+        beg = b_beg * r * H * W;
+        end = b_end * r * H * W;
+        for ( int i = beg; i < end; i++ ) {
             *( v_T+i ) = *( v_sgx+i );
         }
     }
 
-    void test_ReLUPooling_fwd_enclave(float *in_sgx, float* in_gpu, float* out, float* u_T, float* v_T, int batchsize, int n_chnls, int Hi, int Wi, int Ho, int Wo, int lyr, int r ) {
-        //-> init sgx context
-        sgx_ctx.batchsize = batchsize;
-        sgx_ctx.useSGX = 1; sgx_ctx.verbose = 1;
-        // fist add a pseudo conv context
-        sgx_add_Conv_ctx( &sgx_ctx, n_chnls, n_chnls, 3, 1, 1, Hi, Wi, Hi, Wi, r);
-
-        sgx_add_ReLUPooling_ctx( &sgx_ctx, n_chnls, 2, 2, 0, Hi, Wi, Ho, Wo, 0);
-
-        // last add a pseudo conv context
-        sgx_add_Conv_ctx( &sgx_ctx, n_chnls, n_chnls, 3, 1, 1, Ho, Wo, Ho, Wo, r);
-
+    void test_ReLUPooling_fwd_enclave(float *in_sgx, float* in_gpu, float* out, float* u_T, float* v_T, int b_beg, int b_end) {
         //-> init in_sgx
-        int sz_top_prev = sgx_ctx.sz_top.at( lyr-1 );
-        float* top_prev = sgx_ctx.top.at( lyr-1 );
-        for ( int i = 0; i < sz_top_prev; i++ ) {
+        int sz_top_prev = sgx_ctx.sz_top.at( 0 );
+        float* top_prev = sgx_ctx.top.at( 0 );
+        lyrConfig* lyr_conf = sgx_ctx.config.at( 1 );
+        int n_chnls = lyr_conf->relupooling_conf->n_chnls;
+        int Hi = lyr_conf->relupooling_conf->Hi; int Wi = lyr_conf->relupooling_conf->Wi;
+        int beg = b_beg * n_chnls * Hi * Wi;
+        int end = b_end * n_chnls * Hi * Wi;
+        for ( int i = beg; i < end; i++ ) {
             *( top_prev + i ) = *( in_sgx + i );
         }
 
         //-> ReLUPooling FWD
-        sgx_ReLUPooling_fwd( &sgx_ctx, in_gpu, out, lyr, 0);
+        sgx_ReLUPooling_fwd( &sgx_ctx, in_gpu, out, 1, 0, b_beg, b_end);
 
         //-> Extract u_T and v_T
-        int sz_u_T = batchsize * r * n_chnls;
-        int sz_v_T = batchsize * r * Ho * Wo;
-        float* u_sgx = sgx_ctx.bottom.at( lyr+1 );
+        int b_stride = b_end - b_beg;
+        int r = lyr_conf->relupooling_conf->r;
+        int sz_u_T = sgx_ctx.batchsize * r * n_chnls;
+        float* u_sgx = sgx_ctx.bottom.at( 2 );
         float* v_sgx = u_sgx + ( sz_u_T );
-        for ( int i = 0; i < sz_u_T; i++ ) {
+        beg = b_beg * r * n_chnls;
+        end = b_end * r * n_chnls;
+        for ( int i = beg; i < end; i++ ) {
             *(u_T + i) = *( u_sgx + i );
         }
-        for ( int i = 0; i < sz_v_T; i++ ) {
+        int Ho = lyr_conf->relupooling_conf->Ho; int Wo = lyr_conf->relupooling_conf->Wo;
+        beg = b_beg * r * Ho * Wo;
+        end = b_end * r * Ho * Wo;
+        for ( int i = beg; i < end; i++ ) {
             *( v_T + i ) = *( v_sgx + i );
         }
     }

@@ -34,22 +34,22 @@ extern "C" {
 
     //Conv interface
     ATTESTATION_STATUS sgx_add_Conv_ctx(sgxContext* sgx_ctx, int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r);
-    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr);
-    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr);
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end);
+    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr, int c_beg, int c_end);
 
     //ReLU interface
-    ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chanls, int H, int W);
+    ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chnls, int H, int W);
 
-    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float* out, int lyr);
+    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float* out, int lyr, int b_beg, int b_end);
 
-    ATTESTATION_STATUS sgx_ReLU_bwd(sgxContext* sgx_ctx, float* gradin, int lyr);
+    ATTESTATION_STATUS sgx_ReLU_bwd(sgxContext* sgx_ctx, float* gradin, int lyr, int b_beg, int b_end);
 
     //ReLUPooling interface
     ATTESTATION_STATUS sgx_add_ReLUPooling_ctx(sgxContext* sgx_ctx, int n_chnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int mode);
 
-    ATTESTATION_STATUS sgx_ReLUPooling_fwd(sgxContext* sgx_ctx, float* in, float* out, int lyr, int lyr_pooling);
+    ATTESTATION_STATUS sgx_ReLUPooling_fwd(sgxContext* sgx_ctx, float* in, float* out, int lyr, int lyr_pooling, int b_beg, int b_end);
     
-    ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float*gradout, float* gradin, int lyr, int lyr_pooling);
+    ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float*gradout, float* gradin, int lyr, int lyr_pooling, int b_beg, int b_end);
 
     //SVD
     void sgx_light_SVD(float* in, 

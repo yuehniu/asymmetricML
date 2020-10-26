@@ -13,6 +13,7 @@ Author:
 
 Note:
 """
+import math
 import torch
 import torch.nn as nn
 
@@ -90,8 +91,9 @@ class asymConv2D(nn.Module):
         self.weight = nn.Parameter(torch.Tensor(n_ochnls, n_ichnls, kernel_size[0], kernel_size[1]))
         self.bias = nn.Parameter(torch.Tensor(n_ochnls))
 
-        self.weight.data.uniform_(-0.1, 0.1)
-        self.bias.data.uniform_(-0.1, 0.1)
+        n = self.kernel_size[0] * self.kernel_size[1] * self.out_channels
+        self.weight.data.normal_(0, math.sqrt(2. / n))
+        self.bias.data.zero_()
 
     def forward(self, input):
         return sgxConv.apply(input, self.weight, self.bias, self.sgxdnn)

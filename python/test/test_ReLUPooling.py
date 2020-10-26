@@ -14,7 +14,7 @@ lib.init_ctx_bridge.argtypes = [c_int, c_bool, c_int, c_bool]
 eid = lib.init_ctx_bridge(0, True, 1, False)
 
 # conv parameters
-batchsize = 1
+batchsize = 64
 n_ichnls = 16
 n_ochnls = 16
 sz_kern = 3
@@ -64,6 +64,8 @@ for b_ in range( batchsize ):
 # Verify u_T and v_T
 u_T_t = np.transpose( u_T, (0,2,1))
 v_T_t = np.transpose( v_T, (0,2,1))
+print(v_T_t[0,0])
+print(v_T_py[0,0])
 print("[Test] Diff of u_T: {:6f}".format( np.linalg.norm(u_T_t - u_T_py) ) )
 print("[Test] Diff of v_T: {:6f}".format( np.linalg.norm(v_T_t - v_T_py) ) )
 

@@ -52,8 +52,8 @@ weight_ptr = np.ctypeslib.as_ctypes( weight.cpu().numpy().reshape(-1) )
 out_ptr = np.ctypeslib.as_ctypes( output_sgx.reshape(-1) )
 
 # call conv fwd in sgx
-lib.test_Conv_fwd_bridge.argtypes = [c_ulong, POINTER(c_float), POINTER(c_float), POINTER(c_float)]
-lib.test_Conv_fwd_bridge( eid, in_ptr, weight_ptr, out_ptr )
+lib.test_Conv_fwd_bridge.argtypes = [c_ulong, POINTER(c_float), POINTER(c_float), POINTER(c_float), c_int, c_int, c_int, c_int, c_int, c_int, c_int, c_int ]
+lib.test_Conv_fwd_bridge( eid, in_ptr, weight_ptr, out_ptr, batchsize, n_ichnls, n_ochnls, Hi, Wi, Ho, Wo, r )
 
 # call conv fwd in torch
 output_torch = torch.nn.functional.conv2d( input_torch, weight, stride=stride, padding=padding)

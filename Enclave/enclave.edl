@@ -10,16 +10,16 @@ enclave {
         public uint32_t set_verbose_enclave(BOOL verbose);
 
         public uint32_t add_Conv_ctx_enclave(int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r);
-        public uint32_t Conv_fwd_enclave([user_check] float* w, int lyr);
-        public uint32_t Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int lyr);
+        public uint32_t Conv_fwd_enclave([user_check] float* w, int lyr, int b_beg, int b_end );
+        public uint32_t Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int lyr, int c_beg, int c_end);
 
         public uint32_t add_ReLU_ctx_enclave(int n_chnls, int H, int W);
-        public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr);
-        public uint32_t ReLU_bwd_enclave([user_check] float* gradin, int lyr);
+        public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr, int b_beg, int b_end);
+        public uint32_t ReLU_bwd_enclave([user_check] float* gradin, int lyr, int b_beg, int b_end);
 
         public uint32_t add_ReLUPooling_ctx_enclave(int n_chnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int mode);
-        public uint32_t ReLUPooling_fwd_enclave([user_check] float* in, [user_check] float* out, int lyr, int lyr_pooling);
-        public uint32_t ReLUPooling_bwd_enclave([user_check] float* gradout, [user_check]float* gradin, int lyr, int lyr_pooling);
+        public uint32_t ReLUPooling_fwd_enclave([user_check] float* in, [user_check] float* out, int lyr, int lyr_pooling, int b_beg, int b_end);
+        public uint32_t ReLUPooling_bwd_enclave([user_check] float* gradout, [user_check]float* gradin, int lyr, int lyr_pooling, int b_beg, int b_end);
         //public uint32_t ReLUPooling_fwd_enclave([in, count=in_size] float* in, [out, count=out_size] float* out, int lyr, int lyr_pooling, int in_size, int out_size);
         //public uint32_t ReLUPooling_bwd_enclave([in, count=out_size] float* gradout, [out, count=in_size]float* gradin, int lyr, int lyr_pooling, int in_size, int out_size);
 
@@ -27,12 +27,12 @@ enclave {
         public void test_light_SVD_enclave([user_check] float* in, [user_check] float* u_T, int u_len, 
                                     [user_check] float* v_T, int v_len, 
                                     int r, int max_iter);
-        public void test_Conv_fwd_enclave([user_check] float* in, [user_check] float* w, [user_check] float* out);
-        public void test_Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw);
+        public void test_Conv_fwd_enclave([user_check] float* in, [user_check] float* w, [user_check] float* out, int b_beg, int b_end );
+        public void test_Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int c_beg, int c_end );
         public void test_ReLU_fwd_enclave([user_check] float *in_sgx, [user_check] float* in_gpu, [user_check] float* u_T, [user_check] float* v_T, 
-                                          int batchsize, int n_chnls, int H, int W, int lyr, int r);
+                                          int b_beg, int b_end);
         public void test_ReLUPooling_fwd_enclave([user_check] float *in_sgx, [user_check] float* in_gpu, [user_check] float* out, [user_check] float* u_T, [user_check] float* v_T, 
-                                                 int batchsize, int n_chnls, int Hi, int Wi, int Ho, int Wo, int lyr, int r );
+                                                 int b_beg, int b_end );
     };
 
     untrusted {

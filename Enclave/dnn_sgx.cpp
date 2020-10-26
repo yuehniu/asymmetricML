@@ -84,7 +84,7 @@ extern "C" {
 
         return SUCCESS;
     }
-    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr){
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end){
         lyrConfig* lyr_conf = sgx_ctx->config.at(lyr);
         conv_Config* conv_conf = lyr_conf->conv_conf;
         int batchsize = sgx_ctx->batchsize;
@@ -95,50 +95,54 @@ extern "C" {
         int sz_w = n_ochnls * r * sz_kern * sz_kern;
 
         //re-arrange kernels
-        float* w_T = ( float* )malloc( sizeof(float) * batchsize * sz_w );
+        int b_stride = b_end - b_beg;
+        float* w_T = ( float* )malloc( sizeof(float) * b_stride * sz_w );
         //std::memset( w_T, 0, sizeof(float) * batchsize * sz_w );
         float* u_T = sgx_ctx->bottom.at(lyr);
         float* w_T_oc = w_T;
         float* w_oc = w;
-        for ( int i = 0; i < batchsize*sz_w; i++ ) {
+        for ( int i = 0; i < b_stride*sz_w; i++ ) {
             *( w_T+i ) = 0.0;
         }
-        #pragma omp parallel
-        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+        for ( int b_ = b_beg; b_ < b_end; b_++ ) {
             w_oc = w;
+            float* u_T_ptr = u_T + ( b_ * r * n_ichnls );
             for( int oc_ = 0; oc_ < n_ochnls; oc_++ ){
                 for ( int r_ = 0; r_ < r; r_++ ) {
                     float* w_T_r = w_T_oc + ( r_ * sz_kern2 ); 
-                    float* u_T_r = u_T + ( r_ * n_ichnls );
+                    float* u_T_r = u_T_ptr + ( r_ * n_ichnls );
                     for ( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
                         float* w_r = w_oc + ( ic_ * sz_kern2 );
                         float u_ij = *( u_T_r + ic_ );
                         for ( int k = 0; k < sz_kern2; k++ ) {
                             *( w_T_r+k ) += u_ij * ( *(w_r+k) );
+                            //if (lyr == 1 && b_ == 0 && oc_ == 0){
+                            //    std::string s = std::to_string(*(w_r+k)) + "\n";
+                            //    printf(s.c_str());
+                            //}
                         } } } 
                 w_T_oc += ( r * sz_kern2 );
                 w_oc += ( n_ichnls * sz_kern2 );
             } 
-            u_T += ( r * n_ichnls );
         }
 
         //->Debug
-        /*for ( int b_ = 0; b_ < 1; b_++ ) {
-            for ( int oc_ = 0; oc_ < 1; oc_++ ) {
-                for ( int r_ = 1; r_ < 2; r_++ ) {
-                    std::string s0 = std::to_string(b_) + "-" + std::to_string(oc_) + "-" + std::to_string(r_) + "\n";
-                    printf(s0.c_str());
-                    for ( int k1 = 0; k1 < sz_kern; k1++ ) {
-                        for ( int k2 = 0; k2 < sz_kern; k2++ ) {
-                            int i = ( b_*n_ochnls*r + oc_*r + r_)*sz_kern2 + k1* sz_kern + k2;
-                            std::string s = std::to_string( *( w_T+i ) );
-                            s = s + "\t";
-                            const char* mess = s.c_str();
-                            printf(mess);
+        /*if ( lyr == 1 && b_beg == 0 ){
+            for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+                for ( int oc_ = 0; oc_ < 1; oc_++ ) {
+                    for ( int r_ = 0; r_ < 1; r_++ ) {
+                        std::string s0 = std::to_string(b_) + "-" + std::to_string(oc_) + "-" + std::to_string(r_) + "\n";
+                        printf(s0.c_str());
+                        for ( int k1 = 0; k1 < sz_kern; k1++ ) {
+                            for ( int k2 = 0; k2 < sz_kern; k2++ ) {
+                                int i = ( b_*n_ochnls*r + oc_*r + r_)*sz_kern2 + k1* sz_kern + k2;
+                                std::string s = "[DEBUG-SGX::Conv::FWD] " + std::to_string( *( w_T+i ) ) + "\t";
+                                printf(s.c_str());
+                            }
+                            printf("\n");
                         }
                         printf("\n");
                     }
-                    printf("\n");
                 }
             }
         }*/
@@ -151,10 +155,10 @@ extern "C" {
         int Wi = conv_conf->Wi; int Hi = conv_conf->Hi;
         int stride = conv_conf->stride;
         int padding = conv_conf->padding;
-        #pragma omp parallel
-        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+        for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+            int bi = b_ - b_beg;
             for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
-                float* w_b = w_T + ( b_*n_ochnls*r + oc_*r ) * sz_kern2;
+                float* w_b = w_T + ( bi*n_ochnls*r + oc_*r ) * sz_kern2;
                 float* out_oc = out + ( b_*n_ochnls + oc_ ) * Wo * Ho;
                 for ( int ho_ = 0; ho_ < Ho; ho_++ ) {
                     for ( int wo_ = 0; wo_ < Wo; wo_++ ) {
@@ -181,7 +185,7 @@ extern "C" {
                                     out_ij += ( w_ij * in_ij );
 
                                     w_left++;
-                                    //if ( b_ == 0 && oc_ == 0 && ho_==0 && wo_==0 && r_==1 ) {
+                                    //if ( b_ == 0 && oc_ == 0 && ho_==0 && wo_==0 && r_==0 ) {
                                     //    std::string s = std::to_string(w_ij) + ":" + std::to_string(in_ij);
                                     //    s = s + "\n";
                                     //    const char* message = s.c_str();
@@ -192,6 +196,10 @@ extern "C" {
                                 w_top++;
                                 } }
                         *( out_oc + ho_*Wo + wo_ ) = out_ij;
+                        //if(lyr == 1 && b_ == 0 && oc_ == 0 && ho_ == 0 ){
+                        //    std::string s = "[DEBUG-SGX::Conv::FWD] out: " + std::to_string(out_ij) + "\n";
+                        //    printf(s.c_str());
+                        //}
                         //std::string s = std::to_string(b_)+ "-" + 
                         //                std::to_string(oc_) + "-" + 
                         //                std::to_string(ho_) + "-" + 
@@ -201,7 +209,7 @@ extern "C" {
         return SUCCESS;
     }
 
-    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr) {
+    ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr, int c_beg, int c_end ){
         lyrConfig* lyr_conf = sgx_ctx->config.at(lyr);
         conv_Config* conv_conf = lyr_conf->conv_conf;
         int batchsize = sgx_ctx->batchsize;
@@ -214,15 +222,16 @@ extern "C" {
         int stride = conv_conf->stride; int padding = conv_conf->padding;
         float* u_T = sgx_ctx->bottom.at( lyr );
         float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
-        int sz_w = n_ochnls * r * sz_kern * sz_kern;
+        int c_stride = c_end - c_beg;
+        int sz_w = c_stride * r * sz_kern * sz_kern;
         float* dw_T = ( float* )malloc( sizeof(float) * batchsize * sz_w );
 
         //convolution backward
-        #pragma omp parallel
         for ( int b_ = 0; b_ < batchsize; b_++ ) {
-            for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
+            for ( int oc_ = c_beg; oc_ < c_end; oc_++ ) {
+                int ci = oc_ - c_beg;
                 for ( int r_ = 0; r_ < r; r_++ ) {
-                    float* dw_T_r = dw_T + ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern;
+                    float* dw_T_r = dw_T + ( b_*c_stride*r + ci*r + r_ ) * sz_kern * sz_kern;
                     for ( int i = 0; i < sz_kern; i++ ) {
                         for ( int j = 0; j < sz_kern; j++ ) {
                             float dw_ij = 0.0;
@@ -267,15 +276,15 @@ extern "C" {
         //}
 
         //re-arrange gradients
-        #pragma omp parallel
-        for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
+        for ( int oc_ = c_beg; oc_ < c_end; oc_++ ) {
+            int ci = oc_ - c_beg;
             for( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
                 for ( int i = 0; i < sz_kern; i++ ) {
                     for ( int j = 0; j < sz_kern; j++ ) {
                         float dw_ij = 0.0;
                         for ( int b_ = 0; b_ < batchsize; b_++ ) {
                             for ( int r_ = 0; r_ < r; r_++ ) {
-                                int dw_pos = ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern + i * sz_kern + j;
+                                int dw_pos = ( b_*c_stride*r + ci*r + r_ ) * sz_kern * sz_kern + i * sz_kern + j;
                                 int u_pos = ( b_*n_ichnls*r + r_*n_ichnls + ic_ );
                                 float u_ij = *( u_T + u_pos );
                                 float dw_T_ij = *( dw_T + dw_pos );
@@ -321,7 +330,15 @@ extern "C" {
         return SUCCESS;
     }
 
-    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float *out, int lyr) {
+    /*
+    * ReLU FWD in sgx (only subset of batches, full FWD need call multi-thread of this function)
+    * @param sgx_ctx: SGX running context
+    * @param out: output pointer
+    * @param lyr: current layer index
+    * @param b_beg: mini-batch begin
+    * @param b_end: mini-batch end
+    */
+    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float *out, int lyr, int b_beg, int b_end) {
         int size = sgx_ctx->sz_bottom.at(lyr);
         //std::string s = std::to_string(size);
         //s = s + "\n";
@@ -329,12 +346,21 @@ extern "C" {
         //printf(message);
 
 	//-> Merge input
+        lyrConfig* lyr_conf = sgx_ctx->config.at( lyr );
+        int n_chnls = lyr_conf->relu_conf->n_chnls;
+        int W = lyr_conf->relu_conf->W; int H = lyr_conf->relu_conf->H;
 	float* in_sgx = sgx_ctx->bottom.at( lyr );
         float* out_sgx = NULL;
         if ( lyr > 0) {
             out_sgx = sgx_ctx->top.at( lyr-1 );
         }
-	for (int i = 0; i < size; i++){
+        int beg = b_beg * n_chnls * W * H;
+        int end = b_end * n_chnls * W * H;
+	for (int i = beg; i < end; i++){
+            //if( lyr > 0 && i < 4 ) {
+            //    std::string s = "[DEBUG-SGX::ReLU::FWD] prev: " + std::to_string( *(out+i) ) + "\n";
+            //    printf(s.c_str());
+            //}
             if ( lyr > 0 )
 	        *(in_sgx+i) = *(out + i) + *( out_sgx + i );
             else
@@ -345,7 +371,7 @@ extern "C" {
         //auto in_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(in_sgx, size);
         //auto out_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(out, size);
         //#pragma omp parallel
-        for (int i = 0; i < size; i++) {
+        for (int i = beg; i < end; i++) {
              if (*(in_sgx+i) < 0.0) 
                  *(out+i) = 0.0;
              else 
@@ -359,8 +385,8 @@ extern "C" {
 
         //-> Resplit data using light-weight SVD
         int batchsize = sgx_ctx->batchsize;
-        lyrConfig* lyr_conf = sgx_ctx->config.at( lyr+1 );
-        int n_chnls = lyr_conf->conv_conf->n_ichnls;
+        lyr_conf = sgx_ctx->config.at( lyr+1 );
+        n_chnls = lyr_conf->conv_conf->n_ichnls;
         //number of principle components in current layer
         int r = lyr_conf->conv_conf->r;
         int sz_u_T = lyr_conf->conv_conf->n_ichnls;
@@ -368,7 +394,7 @@ extern "C" {
         int sz_v_T = lyr_conf->conv_conf->Hi * lyr_conf->conv_conf->Wi;
         float* v_T = sgx_ctx->bottom.at( lyr+1 ) + ( batchsize * r * sz_u_T );
         //Initialize u_T and v_T
-        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+        for ( int b_ = b_beg; b_ < b_end; b_++ ) {
             float* out_b  = out + ( b_ * n_chnls * sz_v_T);
             for ( int r_ = 0; r_ < r; r_++ ) {
                 float* u_T_r = u_T + ( (b_*r + r_ ) * sz_u_T );
@@ -382,13 +408,12 @@ extern "C" {
             }
         }
 
-        float* u_ptr = u_T;
-        float* v_ptr = v_T;
-        float* out_ptr = out;
         lyr_conf = sgx_ctx->config.at( lyr );
         lyr_conf->relu_conf->r = r;
-        int H = lyr_conf->relu_conf->H; int W = lyr_conf->relu_conf->W;
-        for( int b_ = 0; b_ < batchsize; b_++ ) {
+        for( int b_ = b_beg; b_ < b_end; b_++ ) {
+            float* u_ptr = u_T + ( b_ * r * sz_u_T );
+            float* v_ptr = v_T + ( b_ * r * sz_v_T );
+            float* out_ptr = out + ( b_ * n_chnls * H * W );
             sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
             
             //if ( b_ == 1 ) {
@@ -397,22 +422,21 @@ extern "C" {
             //        printf(s.c_str());
             //    }
             //}
-
-            u_ptr += r * sz_u_T;
-            v_ptr += r * sz_v_T;
-            out_ptr += ( n_chnls * H * W );
         }
-
 
         return SUCCESS;
     }
 
-    ATTESTATION_STATUS sgx_ReLU_bwd(sgxContext* sgx_ctx, float *gradin, int lyr) {
+    ATTESTATION_STATUS sgx_ReLU_bwd(sgxContext* sgx_ctx, float *gradin, int lyr, int b_beg, int b_end) {
 	float* in = sgx_ctx->bottom.at(lyr);
 
-        int size = sgx_ctx->sz_bottom.at(lyr);
-        #pragma omp parallel
-        for (int i = 0; i < size; i++) {
+        //int size = sgx_ctx->sz_bottom.at(lyr);
+        lyrConfig* lyr_conf = sgx_ctx->config.at( lyr );
+        int n_chnls = lyr_conf->relu_conf->n_chnls;
+        int H = lyr_conf->relu_conf->H; int W = lyr_conf->relu_conf->W;
+        int beg = b_beg * n_chnls * H * W;
+        int end = b_end * n_chnls * H * W;
+        for (int i = beg; i < end; i++) {
             if (*(in + i) < 0.0 ) *(gradin + i) = 0.0;
         }
 	//auto in_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(in, size);
@@ -451,7 +475,7 @@ extern "C" {
 
         return SUCCESS;
     }
-    ATTESTATION_STATUS sgx_ReLUPooling_fwd(sgxContext* sgx_ctx, float *in, float *out, int lyr, int lyr_pooling) {
+    ATTESTATION_STATUS sgx_ReLUPooling_fwd(sgxContext* sgx_ctx, float *in, float *out, int lyr, int lyr_pooling, int b_beg, int b_end) {
         if (!out || !in) {
             return ERROR_UNEXPECTED;
         }
@@ -475,7 +499,13 @@ extern "C" {
             out_prev_sgx = sgx_ctx->top.at( lyr-1 );
         }
 	int* max_indx_ptr = sgx_ctx->max_index.at(lyr_pooling);
-	for ( int i = 0; i < sz_in; i++ ) {
+        int beg = b_beg * n_chnls * Hi * Wi;
+        int end = b_end * n_chnls * Hi * Wi;
+	for ( int i = beg; i < end; i++ ) {
+           //if (lyr > 0 && i < 4){
+           //    std::string s = "[DEBUG-SGX::ReLUPooling::FWD] prev top: " + std::to_string(*(out_prev_sgx+i)) + "\n";
+           //    printf(s.c_str());
+           //}
             if ( lyr > 0 )
                 *(in_sgx + i) = *(in + i) + *(out_prev_sgx + i);
             else
@@ -484,8 +514,7 @@ extern "C" {
         int batchsize = sgx_ctx->batchsize;
 
         //int i = 0;
-        #pragma omp parallel
-        for ( int b_ = 0; b_ < batchsize; b_++ ){
+        for ( int b_ = b_beg; b_ < b_end; b_++ ){
 	    for ( int c_ = 0; c_ < n_chnls; c_++ ) {
 	        int offset1 = ( b_*n_chnls + c_ ) * Wi * Hi;
 		for ( int ho_=0; ho_<Ho; ho_++ ) {
@@ -509,10 +538,6 @@ extern "C" {
                         }
                         *( out+offset_o ) = val_reduced;
 			*( max_indx_ptr+offset_o ) = max_indx;
-                        //std::string s = std::to_string(i);
-                        //s = s + "\n";
-                        //const char* message = s.c_str();
-                        //printf(message);
                         //i = i+1;
 		    } } } }
 
@@ -523,10 +548,10 @@ extern "C" {
             int sz_u_T = lyr_conf->conv_conf->n_ichnls;
             float* u_T = sgx_ctx->bottom.at( lyr+1 );
             int sz_v_T = lyr_conf->conv_conf->Hi * lyr_conf->conv_conf->Wi;
-            float* v_T = sgx_ctx->bottom.at( lyr+1 ) + ( batchsize * r * sz_u_T );
+            float* v_T = u_T + ( batchsize * r * sz_u_T );
             float* out_ptr = out;
             //TODO: Initialize u_T and v_T
-            for ( int b_ = 0; b_ < batchsize; b_++ ) {
+            for ( int b_ = b_beg; b_ < b_end; b_++ ) {
                 float* out_b  = out_ptr + ( b_ * n_chnls * sz_v_T);
                 for ( int r_ = 0; r_ < r; r_++ ) {
                     float* u_T_r = u_T + ( (b_*r + r_ ) * sz_u_T );
@@ -544,7 +569,7 @@ extern "C" {
             lyr_conf->relupooling_conf->r = r;
             float* u_ptr = u_T;
             float* v_ptr = v_T;
-            for( int b_ = 0; b_ < batchsize; b_++ ) {
+            for( int b_ = b_beg; b_ < b_end; b_++ ) {
                 u_ptr = u_T + ( b_ * r * sz_u_T );
                 v_ptr = v_T + ( b_ * r * sz_v_T );
                 out_ptr = out + ( b_ * n_chnls * Ho * Wo );
@@ -555,7 +580,7 @@ extern "C" {
 
         return SUCCESS;
     }
-    ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float* gradout, float* gradin, int lyr, int lyr_pooling) {
+    ATTESTATION_STATUS sgx_ReLUPooling_bwd(sgxContext* sgx_ctx, float* gradout, float* gradin, int lyr, int lyr_pooling, int b_beg, int b_end) {
         lyrConfig* lyr_config = sgx_ctx->config.at(lyr);
         relupooling_Config* relupooling_conf = lyr_config->relupooling_conf;
         int n_chnls = relupooling_conf->n_chnls;
@@ -566,8 +591,7 @@ extern "C" {
         int mode = relupooling_conf->mode;
         int batchsize = sgx_ctx->batchsize;
         int* max_indx_ptr = sgx_ctx->max_index.at(lyr_pooling);
-        #pragma omp parallel
-        for ( int b_=0; b_<batchsize; b_++ ) {
+        for ( int b_=b_beg; b_<b_end; b_++ ) {
             for ( int c_=0; c_<n_chnls; c_++ ) {
                 int offset1 = ( b_*n_chnls + c_ ) * Wi * Hi;
                 int offset2 = ( b_*n_chnls + c_ ) * Wo * Ho;
@@ -575,6 +599,10 @@ extern "C" {
                     for ( int wo_=0; wo_<Wo; wo_++) {
                        int offset3 = offset2 + ho_*Wo + wo_;
                        int cur_indx = *( max_indx_ptr+offset3 );
+                       //if( b_ == 0 && c_ == 0 & ho_ == 0 && wo_ == 0 ) {
+                       //    std::string s = "[DEBUG-SGX::ReLUPooling::BWD] indx: " + std::to_string(cur_indx) + "\n";
+                       //    printf(s.c_str());
+                       //}
                        //*( max_indx_ptr+offset3 ) = -1;
 			   if( cur_indx != -1)
                                *(gradin + offset1 + cur_indx) = *(gradout + offset3); 
@@ -598,13 +626,14 @@ extern "C" {
                        float* v_T, int v_len, 
                        int r, int max_iter)
     {
+        float eps = 0.000001;
         for ( int r_=0; r_<r; r_++ ) {
             float* u = u_T + ( r_ * u_len );
             float* v = v_T + ( r_ * v_len );
             //Alternating optimization
             for ( int iter=0; iter<max_iter; iter++ ) {
                 // compute u
-                float v_norm = 0.0;
+                float v_norm = 0.0; 
                 for ( int i=0; i<v_len; i++) {
                     float v_i = *( v+i );
                     v_norm += ( v_i * v_i);
@@ -616,11 +645,11 @@ extern "C" {
                         float v_j = *( v + j );
                         u_i += ( X_ij * v_j );
                     }
-                    *( u+i ) = u_i / v_norm;
+                    *( u+i ) = u_i / (v_norm + eps);
                 }
 
                 // computer v
-                float u_norm = 0.0;
+                float u_norm = 0.0; 
                 for ( int i = 0; i < u_len; i++ ) {
                     float u_i = *( u+i );
                     u_norm += ( u_i * u_i );
@@ -632,7 +661,7 @@ extern "C" {
                         float u_i = *( u+i );
                         v_j += ( X_ij * u_i );
                     }
-                    *( v+j ) = v_j / u_norm;
+                    *( v+j ) = v_j / (u_norm + eps);
                 }
             }
 

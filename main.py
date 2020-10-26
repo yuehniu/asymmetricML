@@ -151,11 +151,15 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
 
         # forward and backward
         output = model(input)
+        #print("[DEBUG-PyTorch:Model] Out: {}".format(output))
         loss = criterion(output, target)
         loss.backward()
 
         # update parameter
         optimizer.step()
+
+        #if i == 0:
+        #    quit()
 
         # report acc and loss
         prec1 = cal_acc(output, target)[0]
