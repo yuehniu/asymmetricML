@@ -28,7 +28,7 @@ enclave {
                                     [user_check] float* v_T, int v_len, 
                                     int r, int max_iter);
         public void test_Conv_fwd_enclave([user_check] float* in, [user_check] float* w, [user_check] float* out, int b_beg, int b_end );
-        public void test_Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int c_beg, int c_end );
+        public void test_Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int b_beg, int b_end );
         public void test_ReLU_fwd_enclave([user_check] float *in_sgx, [user_check] float* in_gpu, [user_check] float* u_T, [user_check] float* v_T, 
                                           int b_beg, int b_end);
         public void test_ReLUPooling_fwd_enclave([user_check] float *in_sgx, [user_check] float* in_gpu, [user_check] float* out, [user_check] float* u_T, [user_check] float* v_T, 

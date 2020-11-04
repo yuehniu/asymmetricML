@@ -9,7 +9,6 @@
 #include "datatype.h"
 #include "error_codes.h"
 
-#define NUM_THREADS 16
 struct sgxContext {
     int nLyrs;
     int batchsize;
@@ -22,6 +21,7 @@ struct sgxContext {
     std::vector<float *> bottom = {};
     std::vector<float *> top = {};
     std::vector<int *> max_index = {};
+    std::vector<float *> w_T = {};
     std::vector<int> n_pchanls = {};
 };
 

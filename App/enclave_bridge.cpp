@@ -9,7 +9,7 @@
 #include <vector>
 
 #define ENCLAVE_FILE_NAME "lib/libenclave.signed.so"
-#define N_THREADS 64
+#define N_THREADS 32
 
 struct sgxContext_public {
     int batchsize;
@@ -109,6 +109,7 @@ extern "C"
     uint32_t Conv_bwd_bridge( sgx_enclave_id_t eid, float* gradout, float* gradw, int lyr ) {
         uint32_t status[ N_THREADS ] = {0};
         int n_ochnls = sgx_ctx_pub.n_ochnls.at( lyr );
+        int batchsize = sgx_ctx_pub.batchsize;
         int c_stride = n_ochnls / N_THREADS;
         std::thread trd[ N_THREADS ];
         for( int i = 0; i < N_THREADS; i++ ){
@@ -149,7 +150,7 @@ extern "C"
         for( int i = 0; i < N_THREADS; i++ ) {
             trd[ i ].join();
         }
-        //ReLU_fwd_enclave(eid, &status, out, lyr);
+        //ReLU_fwd_enclave(eid, status, out, lyr, 0, batchsize);
         
         return status[ 0 ];
     }
@@ -167,7 +168,7 @@ extern "C"
         for( int i = 0; i < N_THREADS; i++ ) {
             trd[ i ].join();
         }
-        //ReLU_bwd_enclave(eid, &status, gradin, lyr);
+        //ReLU_bwd_enclave(eid, status, gradin, lyr, 0, batchsize);
 
         return status[ 0 ];
     }
@@ -236,6 +237,7 @@ extern "C"
         add_Conv_ctx_enclave( eid, &status, n_ichnls, n_ochnls, 3, 1, 1, Hi, Wi, Ho, Wo, r );
         sgx_ctx_pub.n_ichnls.push_back( n_ichnls );
         sgx_ctx_pub.n_ochnls.push_back( n_ochnls );
+        sgx_ctx_pub.batchsize = batchsize;
 
         int b_stride = batchsize / N_THREADS;
         std::thread trd[ N_THREADS ];
@@ -252,6 +254,7 @@ extern "C"
 
     void test_Conv_bwd_bridge( sgx_enclave_id_t eid, float* gradout, float* gradw) {
         int n_ochnls = sgx_ctx_pub.n_ochnls.at( 0 );
+        int batchsize = sgx_ctx_pub.batchsize;
         int c_stride = n_ochnls / N_THREADS;
         std::thread trd[ N_THREADS ];
         for( int i = 0; i < N_THREADS; i++ ){

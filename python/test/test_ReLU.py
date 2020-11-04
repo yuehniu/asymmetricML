@@ -14,7 +14,7 @@ lib.init_ctx_bridge.argtypes = [c_int, c_bool, c_int, c_bool]
 eid = lib.init_ctx_bridge(0, True, 1, False)
 
 # conv parameters
-batchsize = 8
+batchsize = 64
 n_ichnls = 16
 n_ochnls = 16
 sz_kern = 3

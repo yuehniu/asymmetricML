@@ -35,7 +35,7 @@ from python.dnn_transform import transform_model
 from python.dnn_sgx import sgxDNN
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', default='vgg11', type=str, help='model name')
+parser.add_argument('--model', default='vgg16', type=str, help='model name')
 parser.add_argument('--device', default='gpu', type=str, choices=['gpu', 'cpu'], help='untrusted platform')
 parser.add_argument('--sgx', action='store_true', help='whether or not use sgx')
 parser.add_argument('--dataset', default='cifar10', type=str)
@@ -153,10 +153,10 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
         output = model(input)
         #print("[DEBUG-PyTorch:Model] Out: {}".format(output))
         loss = criterion(output, target)
-        loss.backward()
+        #loss.backward()
 
         # update parameter
-        optimizer.step()
+        #optimizer.step()
 
         #if i == 0:
         #    quit()

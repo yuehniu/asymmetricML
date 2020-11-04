@@ -6,6 +6,7 @@ import torch
 
 SGXDNNLIB = "lib/libenclave.signed.so"
 DNNLIB = "lib/enclave_bridge.so"
+N_THREADS = 8
 
 # create sgx environment
 lib = cdll.LoadLibrary(DNNLIB)
@@ -14,7 +15,7 @@ lib.init_ctx_bridge.argtypes = [c_int, c_bool, c_int, c_bool]
 eid = lib.init_ctx_bridge(0, True, 1, False)
 
 # conv parameters
-batchsize = 8
+batchsize = 64
 n_ichnls = 16
 n_ochnls = 16
 sz_kern = 3
@@ -24,7 +25,7 @@ Hi = 32
 Wi = 32
 Ho = 32
 Wo = 32
-r = 4
+r = 2
 
 #-> Generate samples
 input_orig = torch.randn( batchsize, n_ichnls, Hi, Wi )
@@ -48,7 +49,10 @@ weight = torch.randn( n_ochnls, n_ichnls, sz_kern, sz_kern )
 output_sgx = np.zeros( (batchsize, n_ochnls, Ho, Wo ), dtype=np.float32 )
 
 in_ptr = np.ctypeslib.as_ctypes(input_sgx.cpu().numpy().reshape(-1))
-weight_ptr = np.ctypeslib.as_ctypes( weight.cpu().numpy().reshape(-1) )
+weight_t = torch.transpose(weight, dim0=0, dim1=1).clone()
+#weight_t = weight.clone()
+weight_sgx = weight_t.cpu().numpy()
+weight_ptr = np.ctypeslib.as_ctypes( weight_sgx.reshape(-1) )
 out_ptr = np.ctypeslib.as_ctypes( output_sgx.reshape(-1) )
 
 # call conv fwd in sgx
@@ -77,8 +81,8 @@ print(input_sgx[0, r_])
 """
 
 # Verify output
-#print(output_sgx[0,1,:,:])
-#print(output_torch[0,1,:,:])
+print(output_sgx[0,1,:,:])
+print(output_torch[0,1,:,:])
 print( "Diff between SGX and Torch execution: {:6f}".format(torch.dist(torch.Tensor(output_sgx), output_torch) ))
 
 #-> Test conv bwd
@@ -86,11 +90,13 @@ print("Verify Conv bwd...")
 gradout = torch.randn_like( output_torch )
 
 # call conv bwd in sgx
-gradw_sgx = np.zeros_like( weight )
+gradw_sgx = np.zeros( (n_ochnls, n_ichnls, sz_kern, sz_kern), dtype=np.float32 )
 gradout_ptr = np.ctypeslib.as_ctypes( gradout.cpu().numpy().reshape(-1) )
 gradw_ptr = np.ctypeslib.as_ctypes( gradw_sgx.reshape(-1) )
 lib.test_Conv_bwd_bridge.argtypes = [c_ulong, POINTER(c_float), POINTER(c_float)]
 lib.test_Conv_bwd_bridge( eid, gradout_ptr, gradw_ptr )
+gradw_sgx_t = np.transpose( gradw_sgx.reshape(n_ochnls, sz_kern, sz_kern, n_ichnls), (0, 3, 1, 2) )
+print(gradw_sgx_t.shape)
 
 # call conv bwd in torch
 gradw_torch = torch.nn.grad.conv2d_weight( input_torch, weight.shape, gradout, stride=stride, padding=padding)
@@ -110,6 +116,6 @@ print("gradw_b_oc_r: {}".format(gradw_b_oc_r_1))
 """
 
 # Verify gradw
-#print("gradw from sgx: {}".format( gradw_sgx[0,0] ))
-#print("gradw from torch: {}".format( gradw_torch[0,0] ))
-print("Diff between SGX and Torch excution: {:6f}".format(torch.dist( torch.Tensor(gradw_sgx), gradw_torch )))
+print("gradw from sgx: {}".format( gradw_sgx_t[2,0] ))
+print("gradw from torch: {}".format( gradw_torch[2,0] ))
+print("Diff between SGX and Torch excution: {:6f}".format(torch.dist( torch.Tensor(gradw_sgx_t), gradw_torch )))

@@ -11,13 +11,18 @@
 #include "dnn_sgx.h"
 #include "enclave_t.h"
 #include "error_codes.h"
-#include <unsupported/Eigen/CXX11/Tensor>
 #include <Eigen/Core>
+#include <Eigen/Dense>
+#include <unsupported/Eigen/CXX11/Tensor>
+#include "eigen_spatial_convolutions-inl.h"
+#include "eigen_backward_spatial_convolutions.h"
 
-#define USE_EIGEN_TENSOR
+#define SGX_ONLY
 
 #define MAX(a, b) ( (a)>(b) ? (a) : (b) )
 #define MIN(a, b) ( (a)<(b) ? (a) : (b) )
+
+using namespace Eigen;
 
 extern "C" {
     ATTESTATION_STATUS sgx_init_ctx(sgxContext* sgx_ctx, int n_lyrs, BOOL use_sgx, int batchsize, BOOL verbose) {
@@ -76,11 +81,13 @@ extern "C" {
         int sz_out = batchsize * n_ochnls * Ho * Wo;
         auto in_ptr = ( float* )malloc( sizeof(float) * sz_in );
         auto out_ptr = ( float* )malloc( sizeof(float) * sz_out );
-        if (!in_ptr || !out_ptr) {
+        auto w_T_ptr = ( float* )malloc( sizeof(float) * batchsize * n_ochnls * r * sz_kern * sz_kern );
+        if (!in_ptr || !out_ptr || !w_T_ptr) {
             return MALLOC_ERROR;
         }
         sgx_ctx->bottom.push_back( in_ptr ); sgx_ctx->top.push_back( out_ptr );
         sgx_ctx->sz_bottom.push_back( sz_in ); sgx_ctx->sz_top.push_back( sz_out );
+        sgx_ctx->w_T.push_back( w_T_ptr );
 
         return SUCCESS;
     }
@@ -92,11 +99,12 @@ extern "C" {
         int sz_kern = conv_conf->sz_kern;
         int sz_kern2 = sz_kern * sz_kern;
         int r = conv_conf->r;
-        int sz_w = n_ochnls * r * sz_kern * sz_kern;
+        int sz_w = n_ochnls * r * sz_kern2;
 
         //re-arrange kernels
         int b_stride = b_end - b_beg;
-        float* w_T = ( float* )malloc( sizeof(float) * b_stride * sz_w );
+        //float* w_T = ( float* )malloc( sizeof(float) * b_stride * sz_w );
+        float* w_T = sgx_ctx->w_T.at( lyr ) + b_beg * sz_w;
         //std::memset( w_T, 0, sizeof(float) * batchsize * sz_w );
         float* u_T = sgx_ctx->bottom.at(lyr);
         float* w_T_oc = w_T;
@@ -104,7 +112,15 @@ extern "C" {
         for ( int i = 0; i < b_stride*sz_w; i++ ) {
             *( w_T+i ) = 0.0;
         }
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_w( w, n_ichnls, n_ochnls*sz_kern2 );
         for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+            int bi = b_ - b_beg;
+            float* w_T_b = w_T + ( bi * n_ochnls * r * sz_kern2 );
+            float* u_T_b = u_T + ( b_ * r * n_ichnls ); 
+            Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_w_T( w_T_b, r, n_ochnls*sz_kern2 );
+            Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_u_T( u_T_b, r, n_ichnls );
+            mat_w_T = mat_u_T * mat_w;
+            /*
             w_oc = w;
             float* u_T_ptr = u_T + ( b_ * r * n_ichnls );
             for( int oc_ = 0; oc_ < n_ochnls; oc_++ ){
@@ -120,22 +136,23 @@ extern "C" {
                             //    std::string s = std::to_string(*(w_r+k)) + "\n";
                             //    printf(s.c_str());
                             //}
-                        } } } 
+                       } } } 
                 w_T_oc += ( r * sz_kern2 );
                 w_oc += ( n_ichnls * sz_kern2 );
             } 
+            */
         }
 
         //->Debug
-        /*if ( lyr == 1 && b_beg == 0 ){
-            for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+        /*if ( lyr == 0 && b_beg == 0 ){
+            for ( int b_ = 0; b_ < 1; b_++ ) {
                 for ( int oc_ = 0; oc_ < 1; oc_++ ) {
                     for ( int r_ = 0; r_ < 1; r_++ ) {
                         std::string s0 = std::to_string(b_) + "-" + std::to_string(oc_) + "-" + std::to_string(r_) + "\n";
                         printf(s0.c_str());
                         for ( int k1 = 0; k1 < sz_kern; k1++ ) {
                             for ( int k2 = 0; k2 < sz_kern; k2++ ) {
-                                int i = ( b_*n_ochnls*r + oc_*r + r_)*sz_kern2 + k1* sz_kern + k2;
+                                int i = ( b_*n_ochnls*r + oc_ + r_*n_ochnls)*sz_kern2 + k1* sz_kern + k2;
                                 std::string s = "[DEBUG-SGX::Conv::FWD] " + std::to_string( *( w_T+i ) ) + "\t";
                                 printf(s.c_str());
                             }
@@ -149,16 +166,38 @@ extern "C" {
         //->End Debug
 
         //convolution forward
-        float* out = sgx_ctx->top.at( lyr );
-        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
         int Wo = conv_conf->Wo; int Ho = conv_conf->Ho;
         int Wi = conv_conf->Wi; int Hi = conv_conf->Hi;
         int stride = conv_conf->stride;
         int padding = conv_conf->padding;
+        float* out = sgx_ctx->top.at( lyr );
+        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
+
+        // Eigen-based implementation
+        for (int b_ = b_beg; b_ < b_end; b_++) {
+            int bi = b_ - b_beg;
+            float* w_T_ptr = w_T + ( bi*n_ochnls*r ) * sz_kern2;
+            TensorMap< Tensor<float, 4, RowMajor> > tensor_w_T(w_T_ptr, r, n_ochnls, sz_kern, sz_kern);
+            array<ptrdiff_t, 4> shuffles;
+            shuffles[0] = 2; shuffles[1] = 3; shuffles[2] = 0; shuffles[3] = 1;
+            Tensor<float, 4, RowMajor> tensor_w = tensor_w_T.shuffle(shuffles);
+            float* in_ptr = in + ( b_ * r ) * Hi * Wi; 
+            TensorMap< Tensor<float, 3, RowMajor> > tensor_in_b( in_ptr, r, Hi, Wi );
+            array<ptrdiff_t, 3> shuffles2;
+            shuffles2[0] = 1; shuffles2[1] = 2; shuffles2[2] = 0;
+            Tensor<float, 3, RowMajor> tensor_in = tensor_in_b.shuffle(shuffles2);
+            float* out_ptr = out + ( b_ * n_ochnls ) * Ho * Wo;
+            TensorMap< Tensor<float, 3, RowMajor> > tensor_out_b( out_ptr, n_ochnls, Wo, Ho );
+            //Tensor<float, 3, RowMajor> tensor_out = tensor_out_b.shuffle(shuffles2);
+            tensor_out_b.shuffle(shuffles2) = SpatialConvolution( tensor_in, tensor_w, stride, stride, PADDING_SAME );
+        }
+
+        /* Naive implementation
         for ( int b_ = b_beg; b_ < b_end; b_++ ) {
             int bi = b_ - b_beg;
             for ( int oc_ = 0; oc_ < n_ochnls; oc_++ ) {
-                float* w_b = w_T + ( bi*n_ochnls*r + oc_*r ) * sz_kern2;
+                //float* w_b = w_T + ( bi*n_ochnls*r + oc_*r ) * sz_kern2;
+                float* w_b = w_T + ( bi*n_ochnls*r + oc_ ) * sz_kern2;
                 float* out_oc = out + ( b_*n_ochnls + oc_ ) * Wo * Ho;
                 for ( int ho_ = 0; ho_ < Ho; ho_++ ) {
                     for ( int wo_ = 0; wo_ < Wo; wo_++ ) {
@@ -175,7 +214,8 @@ extern "C" {
                         in_bottom = MIN( Hi, in_bottom );
                         for ( int r_ = 0; r_ < r; r_++ ) {
                             float* in_r = in + ( b_*r + r_ ) * Hi * Wi;
-                            float* w_r = w_b + ( r_ * sz_kern2 );
+                            //float* w_r = w_b + ( r_ * sz_kern2 );
+                            float* w_r = w_b + ( r_* n_ochnls * sz_kern2 );
                             int w_top = w_top_beg;
                             int w_left = w_left_beg;
                             for ( int hi_ = in_top; hi_ < in_bottom; hi_++ ) {
@@ -196,8 +236,8 @@ extern "C" {
                                 w_top++;
                                 } }
                         *( out_oc + ho_*Wo + wo_ ) = out_ij;
-                        //if(lyr == 1 && b_ == 0 && oc_ == 0 && ho_ == 0 ){
-                        //    std::string s = "[DEBUG-SGX::Conv::FWD] out: " + std::to_string(out_ij) + "\n";
+                        //if(lyr == 0 && b_ == 41 && oc_ == 15 && ho_ == 0 ){
+                        //    std::string s = "[DEBUG-SGX::Conv::FWD] out: " + std::to_string(*(out_oc+ho_*Wo+wo_)) + "\n";
                         //    printf(s.c_str());
                         //}
                         //std::string s = std::to_string(b_)+ "-" + 
@@ -205,7 +245,8 @@ extern "C" {
                         //                std::to_string(ho_) + "-" + 
                         //                std::to_string(wo_);
                     } } } }
-        free( w_T );
+        */
+        //free( w_T );
         return SUCCESS;
     }
 
@@ -215,6 +256,7 @@ extern "C" {
         int batchsize = sgx_ctx->batchsize;
         int r = conv_conf->r;
         int sz_kern = conv_conf->sz_kern;
+        int sz_kern2 = sz_kern*sz_kern;
         int n_ochnls = conv_conf->n_ochnls;
         int n_ichnls = conv_conf->n_ichnls;
         int Hi = conv_conf->Hi; int Wi = conv_conf->Wi;
@@ -223,18 +265,56 @@ extern "C" {
         float* u_T = sgx_ctx->bottom.at( lyr );
         float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
         int c_stride = c_end - c_beg;
-        int sz_w = c_stride * r * sz_kern * sz_kern;
-        float* dw_T = ( float* )malloc( sizeof(float) * batchsize * sz_w );
+        int sz_w = r * sz_kern * sz_kern;
+        //float* dw_T = ( float* )malloc( sizeof(float) * batchsize * c_stride * sz_w );
+        float* dw_T = sgx_ctx->w_T.at( lyr ) + c_beg * batchsize * sz_w;
 
-        //convolution backward
+        //convolution backward (Eigen-based implementation)
+        /*array<ptrdiff_t, 4> shuffles_w;
+        shuffles_w[0] = 2; shuffles_w[1] = 3; shuffles_w[2] = 0; shuffles_w[3] = 1;
+        array<ptrdiff_t, 4> shuffles_i;
+        shuffles_i[0] = 0; shuffles_i[1] = 2; shuffles_i[2] = 3; shuffles_i[3] = 1;
+        array<ptrdiff_t, 4> shuffles_o;
+        shuffles_o[0] = 0; shuffles_o[1] = 2; shuffles_o[2] = 3; shuffles_o[3] = 1;
+        for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+            int bi = b_ - b_beg;
+
+            float* dw_ptr = dw_T + ( bi*n_ochnls*sz_w);
+            TensorMap< Tensor< float, 4, RowMajor > > tensor_dw( dw_ptr, r, n_ochnls, sz_kern, sz_kern );
+            //TensorMap< Tensor< float, 4, RowMajor > > tensor_dw( dw_ptr, sz_kern, sz_kern, r, n_ochnls );
+
+            float* in_ptr = in + ( b_*r ) * Hi * Wi;
+            TensorMap< Tensor< float, 4, RowMajor > > tensor_in( in_ptr, 1, r, Hi, Wi );
+            Tensor< float, 4, RowMajor > tensor_in_t = tensor_in.shuffle(shuffles_i);
+            //TensorMap< Tensor< float, 4, RowMajor > > tensor_in( in_ptr, 1, Hi, Wi, r );
+
+            float* gradout_ptr = gradout + ( b_ * n_ochnls * Ho * Wo );
+            TensorMap< Tensor< float, 4, RowMajor > > tensor_gradout( gradout_ptr, 1, n_ochnls, Ho, Wo);
+            Tensor< float, 4, RowMajor > tensor_gradout_t = tensor_gradout.shuffle( shuffles_o );
+            //TensorMap< Tensor< float, 4, RowMajor > > tensor_gradout( gradout_ptr, 1, Ho, Wo, n_ochnls);
+
+            tensor_dw.shuffle( shuffles_w ) = SpatialConvolutionBackwardKernel( tensor_in_t, tensor_gradout_t, sz_kern, sz_kern, stride, stride );
+            //tensor_dw = SpatialConvolutionBackwardKernel( tensor_in, tensor_gradout, sz_kern, sz_kern, stride, stride );
+        }
+        //re-arrange gradients
+        int thread_i = b_beg / b_stride;
+        Map< Matrix<float, Dynamic, Dynamic, ColMajor> > mat_dw_T( dw_T, n_ochnls*sz_kern2, b_stride*r );
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_u_T( u_T+b_beg*r*n_ichnls, b_stride*r, n_ichnls);
+        float* gradw_ptr = gradw + (thread_i * n_ochnls *n_ichnls*sz_kern2);
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_gradw( gradw_ptr, n_ochnls*sz_kern2, n_ichnls );
+        mat_gradw = mat_dw_T * mat_u_T; */
+
+        
+        //convolution backward (Naive implementation)
         for ( int b_ = 0; b_ < batchsize; b_++ ) {
             for ( int oc_ = c_beg; oc_ < c_end; oc_++ ) {
                 int ci = oc_ - c_beg;
                 for ( int r_ = 0; r_ < r; r_++ ) {
-                    float* dw_T_r = dw_T + ( b_*c_stride*r + ci*r + r_ ) * sz_kern * sz_kern;
+                    //float* dw_T_r = dw_T + ( b_*c_stride*r + ci*r + r_ ) * sz_kern * sz_kern;
+                    float* dw_T_r = dw_T + ci*batchsize*sz_w + b_*r + r_;
                     for ( int i = 0; i < sz_kern; i++ ) {
                         for ( int j = 0; j < sz_kern; j++ ) {
-                            float dw_ij = 0.0;
+                            float dw_ij = 0.0f;
 
                             int in_left = j * stride - padding;
                             int out_left_beg = MAX( 0, -in_left);
@@ -263,19 +343,18 @@ extern "C" {
                                 out_top++;
                             } 
 
-                            *( dw_T_r + i*sz_kern + j ) = dw_ij;
+                            // *( dw_T_r + i*sz_kern + j ) = dw_ij;
+                            *( dw_T_r + (i*sz_kern + j)*batchsize*r ) = dw_ij;
                         } } } } }
-        //for( int k1 = 0; k1 < sz_kern; k1++ ) {
-        //    for ( int k2 = 0; k2 < sz_kern; k2++ ) {
-        //        int b_ = 2; int oc_ = 0; int r_ = 0;
-        //        float* dw_T_r = dw_T + ( b_*n_ochnls*r + oc_*r + r_ ) * sz_kern * sz_kern;
-        //        std::string s = std::to_string( *(dw_T_r + k1*sz_kern + k2) ) + "\t";
-        //        printf(s.c_str());
-        //    }
-        //    printf("\n");
-        //}
-
         //re-arrange gradients
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_dw_T( dw_T, c_stride*sz_kern2, batchsize*r );
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_u_T( u_T, batchsize*r, n_ichnls);
+        float* gradw_ptr = gradw + (c_beg *n_ichnls*sz_kern2);
+        Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_gradw( gradw_ptr, c_stride*sz_kern2, n_ichnls );
+        mat_gradw = mat_dw_T * mat_u_T;
+
+
+        /*
         for ( int oc_ = c_beg; oc_ < c_end; oc_++ ) {
             int ci = oc_ - c_beg;
             for( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
@@ -302,8 +381,9 @@ extern "C" {
                 }
             }
         }
+        */
 
-        free( dw_T );
+        //free( dw_T );
         return SUCCESS;
     }
 
@@ -326,6 +406,7 @@ extern "C" {
         sgx_ctx->top.push_back(out_ptr);
         sgx_ctx->sz_bottom.push_back(size);
         sgx_ctx->sz_top.push_back(size);
+        sgx_ctx->w_T.push_back( NULL );
 
         return SUCCESS;
     }
@@ -339,12 +420,6 @@ extern "C" {
     * @param b_end: mini-batch end
     */
     ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float *out, int lyr, int b_beg, int b_end) {
-        int size = sgx_ctx->sz_bottom.at(lyr);
-        //std::string s = std::to_string(size);
-        //s = s + "\n";
-        //const char* message = s.c_str();
-        //printf(message);
-
 	//-> Merge input
         lyrConfig* lyr_conf = sgx_ctx->config.at( lyr );
         int n_chnls = lyr_conf->relu_conf->n_chnls;
@@ -356,32 +431,19 @@ extern "C" {
         }
         int beg = b_beg * n_chnls * W * H;
         int end = b_end * n_chnls * W * H;
-	for (int i = beg; i < end; i++){
-            //if( lyr > 0 && i < 4 ) {
-            //    std::string s = "[DEBUG-SGX::ReLU::FWD] prev: " + std::to_string( *(out+i) ) + "\n";
-            //    printf(s.c_str());
-            //}
-            if ( lyr > 0 )
-	        *(in_sgx+i) = *(out + i) + *( out_sgx + i );
-            else
-	        *(in_sgx+i) = *(out + i);
-	}
-
-        //-> Apply ReLU op
-        //auto in_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(in_sgx, size);
-        //auto out_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(out, size);
-        //#pragma omp parallel
-        for (int i = beg; i < end; i++) {
-             if (*(in_sgx+i) < 0.0) 
-                 *(out+i) = 0.0;
-             else 
-                 *(out+i) = *(in_sgx+i);
+        int size = end - beg;
+        Map< Matrix<float, 1, Dynamic > > mat_merge( in_sgx+beg, size );
+        Map< Matrix<float, 1, Dynamic > > mat_untrust( out+beg, size );
+        if ( lyr > 0 ) {
+            Map< Matrix<float, 1, Dynamic > > mat_sgx( out_sgx+beg, size );
+            mat_merge = mat_untrust + mat_sgx;
+        }
+        else {
+            mat_merge = mat_untrust;
         }
 
-	//Eigen::Tensor<float, 1> out_map = in_map.cwiseMax(static_cast<float>(0));
-        //out = out_map.data();
-        //char message[] = "[SGX:Trusted+] Call ReLU FWD\n";
-        //printf(message);
+        //-> Apply ReLU op
+        mat_untrust = mat_merge.cwiseMax(0.0);
 
         //-> Resplit data using light-weight SVD
         int batchsize = sgx_ctx->batchsize;
@@ -404,6 +466,7 @@ extern "C" {
                 float* v_T_r = v_T + ( (b_*r + r_) * sz_v_T );
                 for ( int iv = 0; iv < sz_v_T; iv++ ) {
                     *( v_T_r + iv ) = *( out_b + (r_ * sz_v_T) + iv );
+                    //*( v_T_r + iv ) = 1.0;
                 }
             }
         }
@@ -415,13 +478,6 @@ extern "C" {
             float* v_ptr = v_T + ( b_ * r * sz_v_T );
             float* out_ptr = out + ( b_ * n_chnls * H * W );
             sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
-            
-            //if ( b_ == 1 ) {
-            //    for ( int i = 0; i < 32; i++ ) {
-            //        std::string s = std::to_string( *(out_ptr+(0*sz_v_T)+i)) + "\n";
-            //        printf(s.c_str());
-            //    }
-            //}
         }
 
         return SUCCESS;
@@ -439,11 +495,6 @@ extern "C" {
         for (int i = beg; i < end; i++) {
             if (*(in + i) < 0.0 ) *(gradin + i) = 0.0;
         }
-	//auto in_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(in, size);
-	//auto gradin_map = Eigen::TensorMap<Eigen::Tensor<float, 1>>(gradin, size);
-	//auto in_sign = in_map > static_cast<float>(0);
-	//gradin_map *= in_sign;
-	//gradin = gradin_map.data();
 
         return SUCCESS;
     }
@@ -472,6 +523,7 @@ extern "C" {
 	sgx_ctx->bottom.push_back(in_ptr); sgx_ctx->top.push_back(out_ptr);
 	sgx_ctx->sz_bottom.push_back(sz_in); sgx_ctx->sz_top.push_back(sz_out);
 	sgx_ctx->max_index.push_back(max_indx_ptr);
+        sgx_ctx->w_T.push_back( NULL );
 
         return SUCCESS;
     }
@@ -480,7 +532,7 @@ extern "C" {
             return ERROR_UNEXPECTED;
         }
 
-        int sz_in = sgx_ctx->sz_bottom.at(lyr);
+        int batchsize = sgx_ctx->batchsize;
 	lyrConfig* lyr_config = sgx_ctx->config.at(lyr);
         relupooling_Config* relupooling_conf = lyr_config->relupooling_conf;
 	int n_chnls = relupooling_conf->n_chnls;
@@ -501,17 +553,16 @@ extern "C" {
 	int* max_indx_ptr = sgx_ctx->max_index.at(lyr_pooling);
         int beg = b_beg * n_chnls * Hi * Wi;
         int end = b_end * n_chnls * Hi * Wi;
-	for ( int i = beg; i < end; i++ ) {
-           //if (lyr > 0 && i < 4){
-           //    std::string s = "[DEBUG-SGX::ReLUPooling::FWD] prev top: " + std::to_string(*(out_prev_sgx+i)) + "\n";
-           //    printf(s.c_str());
-           //}
-            if ( lyr > 0 )
-                *(in_sgx + i) = *(in + i) + *(out_prev_sgx + i);
-            else
-                *(in_sgx + i) = *(in + i);
+        int size = end - beg;
+        Map< Matrix<float, 1, Dynamic > > mat_merge( in_sgx+beg, size );
+        Map< Matrix<float, 1, Dynamic > > mat_untrust( in+beg, size );
+        if ( lyr > 0 ) {
+            Map< Matrix<float, 1, Dynamic > > mat_sgx( out_prev_sgx+beg, size );
+            mat_merge = mat_untrust + mat_sgx;
         }
-        int batchsize = sgx_ctx->batchsize;
+        else {
+            mat_merge = mat_untrust;
+        }
 
         //int i = 0;
         for ( int b_ = b_beg; b_ < b_end; b_++ ){
@@ -627,53 +678,43 @@ extern "C" {
                        int r, int max_iter)
     {
         float eps = 0.000001;
+        Map< Matrix< float, Dynamic, Dynamic, RowMajor > > X( in, u_len, v_len );
         for ( int r_=0; r_<r; r_++ ) {
             float* u = u_T + ( r_ * u_len );
             float* v = v_T + ( r_ * v_len );
+            Map< Matrix< float, Dynamic, 1 > > u_vec( u, u_len );
+            Map< Matrix< float, Dynamic, 1 > > v_vec( v, v_len );
             //Alternating optimization
             for ( int iter=0; iter<max_iter; iter++ ) {
                 // compute u
-                float v_norm = 0.0; 
-                for ( int i=0; i<v_len; i++) {
-                    float v_i = *( v+i );
-                    v_norm += ( v_i * v_i);
-                }
-                for ( int i = 0; i < u_len; i++ ) {
-                    float u_i = 0.0;
-                    for ( int j = 0; j < v_len; j++ ) {
-                        float X_ij = *( in + i*v_len + j);
-                        float v_j = *( v + j );
-                        u_i += ( X_ij * v_j );
-                    }
-                    *( u+i ) = u_i / (v_norm + eps);
-                }
+                float v_norm = v_vec.squaredNorm(); 
+                u_vec = X * v_vec / ( v_norm + eps );
 
                 // computer v
-                float u_norm = 0.0; 
-                for ( int i = 0; i < u_len; i++ ) {
-                    float u_i = *( u+i );
-                    u_norm += ( u_i * u_i );
-                }
-                for ( int j = 0; j < v_len; j++) {
-                    float v_j = 0.0;
-                    for ( int i = 0; i < u_len; i++ ) {
-                        float X_ij = *( in + i*v_len + j );
-                        float u_i = *( u+i );
-                        v_j += ( X_ij * u_i );
-                    }
-                    *( v+j ) = v_j / (u_norm + eps);
-                }
+                float u_norm = u_vec.squaredNorm();
+                v_vec = X.transpose() * u_vec / ( u_norm + eps );
             }
 
             // remove r-th principle channel from input
-            for ( int i = 0; i < u_len; i++ ) {
-                for ( int j = 0; j < v_len; j++ ) {
-                    float X_ij = *( in + i*v_len + j );
-                    X_ij -= ( *(u+i) * *(v+j) );
-                    *( in + i*v_len +j ) = X_ij;
-                }
+            X -= ( u_vec * v_vec.transpose() );
+        }
+        /*Map< Matrix< float, Dynamic, Dynamic > > u_vec( u_T, u_len, r );
+        Map< Matrix< float, Dynamic, Dynamic > > v_vec( v_T, v_len, r );
+        for ( int iter = 0; iter < max_iter; iter++ ) {
+            Matrix< float, Dynamic, Dynamic > Xv = X * v_vec;
+            Xv.eval();
+            for ( int r_ = 0; r_ < r; r_++ ) {
+                float v_norm = v_vec.col( r_ ).squaredNorm() + eps;
+                u_vec.col( r_ ) = Xv.col( r_ ) / v_norm;
+            }
+            Matrix< float, Dynamic, Dynamic > Xu = X.transpose() * u_vec;
+            Xu.eval();
+            for ( int r_ = 0; r_ < r; r_++ ) {
+                float u_norm = u_vec.col( r_ ).squaredNorm() + eps;
+                v_vec.col( r_ ) = Xu.col( r_ ) / u_norm;
             }
         }
+        X -= ( u_vec * v_vec.transpose() );*/
     }
 
     int printf(const char* fmt, ...) {
