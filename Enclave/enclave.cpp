@@ -96,10 +96,16 @@ extern "C" {
         float* in_sgx = sgx_ctx.bottom.at(0);
         //int sz_in = sgx_ctx.sz_bottom.at(0);
         lyrConfig* lyr_conf = sgx_ctx.config.at( 0 );
+        int r = lyr_conf->conv_conf->r;
         int n_ichnls = lyr_conf->conv_conf->n_ichnls;
         int Hi = lyr_conf->conv_conf->Hi; int Wi = lyr_conf->conv_conf->Wi;
+#ifndef SGX_ONLY
+        int beg = b_beg * r * ( n_ichnls + Hi*Wi );
+        int end = b_end * r * ( n_ichnls + Hi*Wi );
+#else
         int beg = b_beg * n_ichnls * Hi * Wi;
         int end = b_end * n_ichnls * Hi * Wi;
+#endif
         for( int i = beg; i < end; i++ ) {
             *( in_sgx+i ) = *( in+i );
         }

@@ -17,7 +17,6 @@
 #include "eigen_spatial_convolutions-inl.h"
 #include "eigen_backward_spatial_convolutions.h"
 
-#define SGX_ONLY
 
 #define MAX(a, b) ( (a)>(b) ? (a) : (b) )
 #define MIN(a, b) ( (a)<(b) ? (a) : (b) )
@@ -76,6 +75,7 @@ extern "C" {
         sgx_ctx->config.push_back(lyr_conf);
 
         int batchsize = sgx_ctx->batchsize;
+#ifndef SGX_ONLY
         int sz_u_T = n_ichnls; int sz_v_T = Hi * Wi;
         int sz_in = batchsize * r * ( sz_u_T + sz_v_T );
         int sz_out = batchsize * n_ochnls * Ho * Wo;
@@ -88,6 +88,15 @@ extern "C" {
         sgx_ctx->bottom.push_back( in_ptr ); sgx_ctx->top.push_back( out_ptr );
         sgx_ctx->sz_bottom.push_back( sz_in ); sgx_ctx->sz_top.push_back( sz_out );
         sgx_ctx->w_T.push_back( w_T_ptr );
+#else
+        int sz_in = batchsize * n_ichnls * Hi * Wi;
+        int sz_out = batchsize * n_ochnls * Ho * Wo;
+        auto in_ptr = ( float* ) malloc( sizeof(float) * sz_in );
+        auto out_ptr = ( float* ) malloc( sizeof(float) * sz_out );
+        if( !in_ptr || !out_ptr ) return MALLOC_ERROR;
+        sgx_ctx->bottom.push_back( in_ptr ); sgx_ctx->top.push_back( out_ptr );
+        sgx_ctx->sz_bottom.push_back( sz_in ); sgx_ctx->sz_top.push_back( sz_out );
+#endif
 
         return SUCCESS;
     }
@@ -100,18 +109,24 @@ extern "C" {
         int sz_kern2 = sz_kern * sz_kern;
         int r = conv_conf->r;
         int sz_w = n_ochnls * r * sz_kern2;
+        int Wo = conv_conf->Wo; int Ho = conv_conf->Ho;
+        int Wi = conv_conf->Wi; int Hi = conv_conf->Hi;
+        int stride = conv_conf->stride;
+        int padding = conv_conf->padding;
+        float* out = sgx_ctx->top.at( lyr );
 
         //re-arrange kernels
         int b_stride = b_end - b_beg;
+#ifndef SGX_ONLY
         //float* w_T = ( float* )malloc( sizeof(float) * b_stride * sz_w );
         float* w_T = sgx_ctx->w_T.at( lyr ) + b_beg * sz_w;
         //std::memset( w_T, 0, sizeof(float) * batchsize * sz_w );
         float* u_T = sgx_ctx->bottom.at(lyr);
         float* w_T_oc = w_T;
         float* w_oc = w;
-        for ( int i = 0; i < b_stride*sz_w; i++ ) {
-            *( w_T+i ) = 0.0;
-        }
+        //for ( int i = 0; i < b_stride*sz_w; i++ ) {
+        //    *( w_T+i ) = 0.0;
+        //}
         Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_w( w, n_ichnls, n_ochnls*sz_kern2 );
         for ( int b_ = b_beg; b_ < b_end; b_++ ) {
             int bi = b_ - b_beg;
@@ -120,27 +135,6 @@ extern "C" {
             Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_w_T( w_T_b, r, n_ochnls*sz_kern2 );
             Map< Matrix<float, Dynamic, Dynamic, RowMajor> > mat_u_T( u_T_b, r, n_ichnls );
             mat_w_T = mat_u_T * mat_w;
-            /*
-            w_oc = w;
-            float* u_T_ptr = u_T + ( b_ * r * n_ichnls );
-            for( int oc_ = 0; oc_ < n_ochnls; oc_++ ){
-                for ( int r_ = 0; r_ < r; r_++ ) {
-                    float* w_T_r = w_T_oc + ( r_ * sz_kern2 ); 
-                    float* u_T_r = u_T_ptr + ( r_ * n_ichnls );
-                    for ( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
-                        float* w_r = w_oc + ( ic_ * sz_kern2 );
-                        float u_ij = *( u_T_r + ic_ );
-                        for ( int k = 0; k < sz_kern2; k++ ) {
-                            *( w_T_r+k ) += u_ij * ( *(w_r+k) );
-                            //if (lyr == 1 && b_ == 0 && oc_ == 0){
-                            //    std::string s = std::to_string(*(w_r+k)) + "\n";
-                            //    printf(s.c_str());
-                            //}
-                       } } } 
-                w_T_oc += ( r * sz_kern2 );
-                w_oc += ( n_ichnls * sz_kern2 );
-            } 
-            */
         }
 
         //->Debug
@@ -166,11 +160,6 @@ extern "C" {
         //->End Debug
 
         //convolution forward
-        int Wo = conv_conf->Wo; int Ho = conv_conf->Ho;
-        int Wi = conv_conf->Wi; int Hi = conv_conf->Hi;
-        int stride = conv_conf->stride;
-        int padding = conv_conf->padding;
-        float* out = sgx_ctx->top.at( lyr );
         float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
 
         // Eigen-based implementation
@@ -247,6 +236,32 @@ extern "C" {
                     } } } }
         */
         //free( w_T );
+#else
+        //convolution forward
+        float* in = sgx_ctx->bottom.at( lyr );
+        array<ptrdiff_t, 4> shuffles;
+        shuffles[0] = 2; shuffles[1] = 3; shuffles[2] = 0; shuffles[3] = 1;
+        array<ptrdiff_t, 3> shuffles2;
+        shuffles2[0] = 1; shuffles2[1] = 2; shuffles2[2] = 0;
+        int ic_stride = 8;
+
+        // Eigen-based implementation
+        for (int b_ = b_beg; b_ < b_end; b_++) {
+            float* out_ptr = out + ( b_ * n_ochnls ) * Ho * Wo;
+            TensorMap< Tensor<float, 3, RowMajor> > tensor_out_b( out_ptr, n_ochnls, Wo, Ho );
+            tensor_out_b.setZero();
+            for( int ic_ = 0; ic_ < n_ichnls; ic_+=ic_stride ) {
+                float* w_ptr = w + ic_ * n_ochnls * sz_kern * sz_kern;
+                TensorMap< Tensor<float, 4, RowMajor> > tensor_w_T(w_ptr, ic_stride, n_ochnls, sz_kern, sz_kern);
+                Tensor<float, 4, RowMajor> tensor_w = tensor_w_T.shuffle(shuffles);
+
+                float* in_ptr = in + ( b_ * n_ichnls + ic_ ) * Hi * Wi; 
+                TensorMap< Tensor<float, 3, RowMajor> > tensor_in_b( in_ptr, ic_stride, Hi, Wi );
+                Tensor<float, 3, RowMajor> tensor_in = tensor_in_b.shuffle(shuffles2);
+                tensor_out_b.shuffle(shuffles2) += SpatialConvolution( tensor_in, tensor_w, stride, stride, PADDING_SAME );
+            }
+        }
+#endif
         return SUCCESS;
     }
 
@@ -262,10 +277,11 @@ extern "C" {
         int Hi = conv_conf->Hi; int Wi = conv_conf->Wi;
         int Ho = conv_conf->Ho; int Wo = conv_conf->Wo;
         int stride = conv_conf->stride; int padding = conv_conf->padding;
-        float* u_T = sgx_ctx->bottom.at( lyr );
-        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
         int c_stride = c_end - c_beg;
         int sz_w = r * sz_kern * sz_kern;
+#ifndef SGX_ONLY
+        float* u_T = sgx_ctx->bottom.at( lyr );
+        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
         //float* dw_T = ( float* )malloc( sizeof(float) * batchsize * c_stride * sz_w );
         float* dw_T = sgx_ctx->w_T.at( lyr ) + c_beg * batchsize * sz_w;
 
@@ -384,6 +400,49 @@ extern "C" {
         */
 
         //free( dw_T );
+#else
+        //convolution backward (Naive implementation)
+        float* in = sgx_ctx->bottom.at( lyr );
+        for ( int oc_ = c_beg; oc_ < c_end; oc_++ ) {
+            for ( int ic_ = 0; ic_ < n_ichnls; ic_++ ) {
+                float* dw = gradw + ( oc_*n_ichnls + ic_ )*sz_kern2;
+                for ( int i = 0; i < sz_kern; i++ ) {
+                    for ( int j = 0; j < sz_kern; j++ ) {
+                        float dw_ij = 0.0f;
+
+                        int in_left = j * stride - padding;
+                        int out_left_beg = MAX( 0, -in_left);
+                        int in_right = in_left + Wi;
+                        in_left = MAX( 0, in_left );
+                        in_right = MIN( Wi, in_right );
+                            
+                        int in_top = i * stride - padding;
+                        int out_top_beg = MAX( 0, -in_top );
+                        int in_bottom = in_top + Hi;
+                        in_top = MAX( 0, in_top );
+                        in_bottom = MIN( Hi, in_bottom );
+
+                        for ( int b_ = 0; b_ < batchsize; b_++ ) {
+                            float* dout_b = gradout + ( b_*n_ochnls + oc_ ) * Ho * Wo;
+                            float* in_b = in + ( b_*n_ichnls + ic_ ) * Hi * Wi;
+                            int out_top = out_top_beg;
+                            for ( int hi_ = in_top; hi_ < in_bottom; hi_++ ) {
+                                int out_left = out_left_beg;
+                                for ( int wi_ = in_left; wi_ < in_right; wi_++ ) {
+                                    float dout_ij = *( dout_b + out_top*Wo + out_left );
+                                    float in_ij = *( in_b + hi_*Wi + wi_);
+                                    dw_ij += ( in_ij * dout_ij );
+
+                                    out_left++;
+                                }
+                                out_top++;
+                            } 
+                        }
+
+                        // *( dw_T_r + i*sz_kern + j ) = dw_ij;
+                        *( dw + (i*sz_kern + j) ) = dw_ij;
+                        } } } }
+#endif
         return SUCCESS;
     }
 
@@ -426,25 +485,35 @@ extern "C" {
         int W = lyr_conf->relu_conf->W; int H = lyr_conf->relu_conf->H;
 	float* in_sgx = sgx_ctx->bottom.at( lyr );
         float* out_sgx = NULL;
-        if ( lyr > 0) {
-            out_sgx = sgx_ctx->top.at( lyr-1 );
-        }
         int beg = b_beg * n_chnls * W * H;
         int end = b_end * n_chnls * W * H;
         int size = end - beg;
         Map< Matrix<float, 1, Dynamic > > mat_merge( in_sgx+beg, size );
         Map< Matrix<float, 1, Dynamic > > mat_untrust( out+beg, size );
+#ifndef SGX_ONLY
         if ( lyr > 0 ) {
+            out_sgx = sgx_ctx->top.at( lyr-1 );
             Map< Matrix<float, 1, Dynamic > > mat_sgx( out_sgx+beg, size );
             mat_merge = mat_untrust + mat_sgx;
         }
         else {
             mat_merge = mat_untrust;
         }
+#else
+        if( lyr > 0) { 
+            out_sgx = sgx_ctx->top.at( lyr-1 );
+            Map< Matrix<float, 1, Dynamic > > mat_sgx( out_sgx+beg, size );
+            mat_merge = mat_sgx;
+        }
+        else {
+            mat_merge = mat_untrust;
+        }
+#endif
 
         //-> Apply ReLU op
         mat_untrust = mat_merge.cwiseMax(0.0);
 
+#ifndef SGX_ONLY
         //-> Resplit data using light-weight SVD
         int batchsize = sgx_ctx->batchsize;
         lyr_conf = sgx_ctx->config.at( lyr+1 );
@@ -479,6 +548,18 @@ extern "C" {
             float* out_ptr = out + ( b_ * n_chnls * H * W );
             sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
         }
+#else
+    float* in_next_lyr = sgx_ctx->bottom.at( lyr + 1);
+    for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+        int sz_in = n_chnls * H * W;
+        float* in_ptr = in_next_lyr + b_ * sz_in;
+        float* out_ptr = out + b_ * sz_in;
+        for( int i = 0; i < sz_in; i++ ) {
+           *( in_ptr + i )  = *( out_ptr + i );
+           *( out_ptr + i ) = 0.0f;
+        }
+    }
+#endif
 
         return SUCCESS;
     }
@@ -547,22 +628,31 @@ extern "C" {
         //-> Merge input 
 	float* in_sgx = sgx_ctx->bottom.at(lyr);
         float* out_prev_sgx = NULL;
-        if ( lyr > 0 ) {
-            out_prev_sgx = sgx_ctx->top.at( lyr-1 );
-        }
 	int* max_indx_ptr = sgx_ctx->max_index.at(lyr_pooling);
         int beg = b_beg * n_chnls * Hi * Wi;
         int end = b_end * n_chnls * Hi * Wi;
         int size = end - beg;
         Map< Matrix<float, 1, Dynamic > > mat_merge( in_sgx+beg, size );
         Map< Matrix<float, 1, Dynamic > > mat_untrust( in+beg, size );
+#ifndef SGX_ONLY
         if ( lyr > 0 ) {
+            out_prev_sgx = sgx_ctx->top.at( lyr-1 );
             Map< Matrix<float, 1, Dynamic > > mat_sgx( out_prev_sgx+beg, size );
             mat_merge = mat_untrust + mat_sgx;
         }
         else {
             mat_merge = mat_untrust;
         }
+#else
+        if ( lyr > 0 ) { 
+            out_prev_sgx = sgx_ctx->top.at( lyr-1 );
+            Map< Matrix<float, 1, Dynamic > > mat_sgx( out_prev_sgx+beg, size );
+            mat_merge = mat_sgx;
+        }
+        else {
+            mat_merge = mat_untrust;
+        }
+#endif
 
         //int i = 0;
         for ( int b_ = b_beg; b_ < b_end; b_++ ){
@@ -592,6 +682,7 @@ extern "C" {
                         //i = i+1;
 		    } } } }
 
+#ifndef SGX_ONLY
         //Resplit data using light-weight SVD
         if ( lyr != sgx_ctx->config.size()-1 ){
             lyrConfig* lyr_conf = sgx_ctx->config.at( lyr+1 );
@@ -628,6 +719,21 @@ extern "C" {
                 sgx_light_SVD(out_ptr, u_ptr, sz_u_T, v_ptr, sz_v_T, r, 1);
             }
         }
+#else
+    if ( lyr != sgx_ctx->config.size()-1 ){
+        float* in_next_lyr = sgx_ctx->bottom.at( lyr + 1);
+        for ( int b_ = b_beg; b_ < b_end; b_++ ) {
+            int sz_out = n_chnls * Ho * Wo;
+            float* in_ptr = in_next_lyr + b_ * sz_out;
+            float* out_ptr = out + b_ * sz_out;
+            for( int i = 0; i < sz_out; i++ ) {
+               *( in_ptr + i )  = *( out_ptr + i );
+               *( out_ptr + i ) = 0.0f;
+            }
+        }
+    }
+
+#endif
 
         return SUCCESS;
     }

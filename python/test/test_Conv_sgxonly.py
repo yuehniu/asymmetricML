@@ -26,33 +26,20 @@ Hi = 112
 Wi = 112
 Ho = 112
 Wo = 112
-r = 3
+r = 2
 
 #-> Generate samples
-input_orig = torch.randn( batchsize, n_ichnls, Hi, Wi )
+input_orig = torch.randn( batchsize, n_ichnls, Hi, Wi ).cpu()
 input_flatten = torch.reshape( input_orig, (batchsize, n_ichnls, -1) )
-u, s, v = torch.svd(input_flatten)
-u_sub = u[ :,:,0:r ]
-s_sub = s[ :,0:r ]
-v_sub = v[ :,:,0:r ]
-us_sub = torch.matmul( u_sub, torch.diag_embed(s_sub) )
-usv = torch.matmul( us_sub, torch.transpose(v_sub, dim0=1, dim1=2 ) )
-#print( torch.dist(usv, input_flatten) )
-input_torch = torch.reshape( usv, (batchsize, n_ichnls, Hi, Wi) )
 
 #-> Test conv fwd
 print("Verify Conv fwd...")
-us_flatten = torch.reshape( torch.transpose(us_sub, dim0=1, dim1=2), (-1,) )
-#us_flatten = torch.reshape( us_sub, (-1,) )
-v_flatten = torch.reshape( torch.transpose(v_sub, dim0=1, dim1=2), (-1,) )
-input_sgx = torch.cat( (us_flatten, v_flatten) )
-weight = torch.randn( n_ochnls, n_ichnls, sz_kern, sz_kern )
+weight = torch.randn( n_ochnls, n_ichnls, sz_kern, sz_kern ).cpu()
 output_sgx = np.zeros( (batchsize, n_ochnls, Ho, Wo ), dtype=np.float32 )
 
-in_ptr = np.ctypeslib.as_ctypes(input_sgx.cpu().numpy().reshape(-1))
-weight_t = torch.transpose(weight, dim0=0, dim1=1).clone()
-#weight_t = weight.clone()
-weight_sgx = weight_t.cpu().numpy()
+in_ptr = np.ctypeslib.as_ctypes(input_orig.numpy().reshape(-1))
+weight_t = torch.transpose( weight, dim0=0, dim1=1 ).clone()
+weight_sgx = weight_t.numpy()
 weight_ptr = np.ctypeslib.as_ctypes( weight_sgx.reshape(-1) )
 out_ptr = np.ctypeslib.as_ctypes( output_sgx.reshape(-1) )
 
@@ -64,8 +51,8 @@ print("Time needed in SGX: {}".format( time.time() - start ))
 
 # call conv fwd in torch
 start = time.time()
-output_torch = torch.nn.functional.conv2d( input_torch, weight, stride=stride, padding=padding)
-print("Time needed in Torch: {}".format( time.time() - start ))
+output_torch = torch.nn.functional.conv2d( input_orig, weight, stride=stride, padding=padding)
+print("Time needed in PyTorch: {}".format( time.time() - start ))
 
 # Verify weight
 """
@@ -86,28 +73,27 @@ print(input_sgx[0, r_])
 """
 
 # Verify output
-print(output_sgx[0,1,:,:])
-print(output_torch[0,1,:,:])
+print(output_sgx[63,14,:,:])
+print(output_torch[63,14,:,:])
 print( "Diff between SGX and Torch execution: {:6f}".format(torch.dist(torch.Tensor(output_sgx), output_torch) ))
 
 #-> Test conv bwd
 print("Verify Conv bwd...")
-gradout = torch.randn_like( output_torch )
+gradout = torch.randn_like( output_torch ).cpu()
 
 # call conv bwd in sgx
 gradw_sgx = np.zeros( (n_ochnls, n_ichnls, sz_kern, sz_kern), dtype=np.float32 )
-gradout_ptr = np.ctypeslib.as_ctypes( gradout.cpu().numpy().reshape(-1) )
+gradout_ptr = np.ctypeslib.as_ctypes( gradout.numpy().reshape(-1) )
 gradw_ptr = np.ctypeslib.as_ctypes( gradw_sgx.reshape(-1) )
 start = time.time()
 lib.test_Conv_bwd_bridge.argtypes = [c_ulong, POINTER(c_float), POINTER(c_float)]
 lib.test_Conv_bwd_bridge( eid, gradout_ptr, gradw_ptr )
-gradw_sgx_t = np.transpose( gradw_sgx.reshape(n_ochnls, sz_kern, sz_kern, n_ichnls), (0, 3, 1, 2) )
 print("Time needed in SGX: {}".format( time.time() - start ))
 
 # call conv bwd in torch
 start = time.time()
-gradw_torch = torch.nn.grad.conv2d_weight( input_torch, weight.shape, gradout, stride=stride, padding=padding)
-print("Time needed in Torch: {}".format( time.time() - start ))
+gradw_torch = torch.nn.grad.conv2d_weight( input_orig, weight.shape, gradout, stride=stride, padding=padding)
+print("Time needed in PyTorch: {}".format( time.time() - start ))
 
 # Verify conv betwen gradout and input
 """
@@ -124,6 +110,6 @@ print("gradw_b_oc_r: {}".format(gradw_b_oc_r_1))
 """
 
 # Verify gradw
-print("gradw from sgx: {}".format( gradw_sgx_t[2,0] ))
+print("gradw from sgx: {}".format( gradw_sgx[2,0] ))
 print("gradw from torch: {}".format( gradw_torch[2,0] ))
-print("Diff between SGX and Torch excution: {:6f}".format(torch.dist( torch.Tensor(gradw_sgx_t), gradw_torch )))
+print("Diff between SGX and Torch excution: {:6f}".format(torch.dist( torch.Tensor(gradw_sgx), gradw_torch )))

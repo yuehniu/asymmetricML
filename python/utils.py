@@ -2,13 +2,14 @@ import torch
 import torch.nn as nn
 import math
 import numpy as np
-from .models import vgg11, vgg16, vgg19
+from .models import vgg11, vgg16, vgg19, resnet20
 
 def build_network(model_name, **kwargs):
     models = {
         'vgg11': vgg11,
         'vgg16': vgg16,
-        'vgg19': vgg19
+        'vgg19': vgg19,
+        'resnet20': resnet20
     }
 
     return models[model_name](**kwargs)

@@ -19,6 +19,7 @@ import time
 
 SGXDNNLIB = "lib/enclave_bridge.so"
 DNNLIB = "lib/enclave_bridge.so"
+SGX_ONLY = False
 executor = ThreadPoolExecutor( max_workers = 2 )
 
 class sgxDNN(object):
@@ -76,7 +77,7 @@ class sgxDNN(object):
                     if status != 0:
                         print("[PyTorch] Add Conv context failed with error code {}".format(hex(status)))
                         quit()
-                    self.out_buffer.append( None )
+                    self.out_buffer.append( torch.zeros( *self.out_memory_desc[ module ] ).cpu() )
                     self.gradin_buffer.append( torch.zeros( *self.in_memory_desc[ module ] ).cpu() )
                     self.gradw_buffer.append( torch.zeros(n_ochnls, n_ichnls, sz_kern, sz_kern).cpu().reshape(-1) )
                 if module.type == "asymReLU":
@@ -148,27 +149,33 @@ class sgxDNN(object):
             return m
 
         #print("[CUDA] Call Conv FWD")
-        result_sgx = executor.submit( conv_fwd_sgx,  self, weight )
-        result_cuda = executor.submit( conv_fwd_cuda,  self, input, weight, bias )
+        #start = time.time()
+        if not SGX_ONLY:
+            result_sgx = executor.submit( conv_fwd_sgx,  self, weight )
+            result_cuda = executor.submit( conv_fwd_cuda,  self, input, weight, bias )
 
-        output = result_cuda.result()
-        status = result_sgx.result()
-        #status = conv_fwd_sgx(self, weight)
-        #output = conv_fwd_cuda(self, input, weight, bias)
-        if( status != 0 ):
-            print("[PyTorch] Conv FWD failed in sgx with error code {}".format( hex(status) ) )
-            quit()
-        #print("[DEBUG-PyTorch::Conv::FWD] layer: {}".format(self.lyr))
-        #print("[DEBUG-PyTorch::Conv::FWD] input: {}".format(input[0,0]))
-        #print("[DEBUG-PyTorch::Conv::FWD] output: {}".format(output[0,0]))
+            output = result_cuda.result()
+            status = result_sgx.result()
+            #status = conv_fwd_sgx(self, weight)
+            #output = conv_fwd_cuda(self, input, weight, bias)
+            if( status != 0 ):
+                print("[PyTorch] Conv FWD failed in sgx with error code {}".format( hex(status) ) )
+                quit()
+            #print("[DEBUG-PyTorch::Conv::FWD] layer: {}".format(self.lyr))
+            #print("[DEBUG-PyTorch::Conv::FWD] input: {}".format(input[0,0]))
+            #print("[DEBUG-PyTorch::Conv::FWD] output: {}".format(output[0,0]))
+        else:
+            status = conv_fwd_sgx( self, weight )
+            output = self.out_buffer[ self.lyr ]
 
+        #print("[DEBUG-PyTorch::Conv::FWD] torch FWD time({}): {:.6f}".format( self.lyr, time.time() - start ))
         self.lyr += 1
 
         return output
 
 
     def conv_bwd(self, input, gradout, weight, bias):
-        def conv_bwd_sgx(self, gradout, weight ):
+        def conv_bwd_sgx(self, gradout, weight, sgx_only=False ):
             #start = time.time()
             dim_w = weight.shape
             dim_w_t = [ dim_w[0], dim_w[2], dim_w[3], dim_w[1] ]
@@ -180,9 +187,12 @@ class sgxDNN(object):
             self.lib.Conv_bwd_bridge.argtypes = [ c_ulong, POINTER(c_float), POINTER(c_float), c_int ]
             status = self.lib.Conv_bwd_bridge( self.eid, gradout_ptr, gradw_ptr, self.lyr)
             #status = 0
-            #print("[DEBUG-PyTorch::Conv::BWD] sgx BWD time: {}".format( time.time() - start ))
+            #print("[DEBUG-PyTorch::Conv::BWD] sgx BWD time: {:.6f}".format( time.time() - start ))
 
-            return gradw_sgx.cuda().reshape(dim_w_t).permute(0, 3, 1, 2), status
+            if not SGX_ONLY:
+                return gradw_sgx.cuda().reshape(dim_w_t).permute(0, 3, 1, 2), status
+            else:
+                return gradw_sgx.cuda().reshape(dim_w), status
 
         def conv_bwd_cuda( self, gradout, input, weight ):
             #start = time.time()
@@ -193,18 +203,22 @@ class sgxDNN(object):
             gradin = torch.nn.grad.conv2d_input( input_cuda.shape, weight, gradout_cuda, stride, padding ).cpu()
             gradw = torch.nn.grad.conv2d_weight( input_cuda, weight.shape, gradout_cuda, stride, padding )
             gradb = gradout_cuda.sum( (0,2,3) )
-            #print("[DEBUG-PyTorch::Conv::BWD] torch BWD time: {}".format( time.time() - start ))
+            #print("[DEBUG-PyTorch::Conv::BWD] torch BWD time: {:.6f}".format( time.time() - start ))
 
             return gradin, gradw, gradb
 
         self.lyr -= 1
+
         #print("[DEBUG-PyTorch::Conv::BWD] lyr: {}".format(self.lyr))
-        result_sgx = executor.submit( conv_bwd_sgx, self, gradout, weight )
+        result_sgx = executor.submit( conv_bwd_sgx, self, gradout, weight, SGX_ONLY )
         result_cuda = executor.submit( conv_bwd_cuda, self, gradout, input, weight )
 
         gradin, gradw_cuda, gradb = result_cuda.result()
         gradw_sgx, status = result_sgx.result()
-        gradw = gradw_sgx + gradw_cuda
+        if not SGX_ONLY:
+            gradw = gradw_sgx + gradw_cuda
+        else:
+            gradw = gradw_sgx
         #gradw_sgx, status = conv_bwd_sgx(self, gradout, weight)
         #gradin, gradw_cuda, gradb = conv_bwd_cuda(self, gradout, input, weight)
         #print("[DEBUG-PyTorch::Conv::BWD] layer: {}".format(self.lyr))
@@ -243,8 +257,8 @@ class sgxDNN(object):
         #print("[DEBUG-PyTorch::ReLU::FWD] layer: {}".format(self.lyr))
         #print("[DEBUG-PyTorch::ReLU::FWD] input: {}".format(input[0,0]))
         #print("[DEBUG-PyTorch::ReLU::FWD] output: {}".format(output[0,0]))
+        #print("[DEBUG-PyTorch::ReLU::FWD] sgx FWD time({}): {:.6f}".format( self.lyr, time.time() - start ))
         self.lyr += 1
-        #print("[DEBUG-PyTorch::ReLU::FWD] sgx FWD time: {}".format( time.time() - start ))
         return output
 
     def relu_bwd(self, gradout):
@@ -253,6 +267,7 @@ class sgxDNN(object):
         :return: gradient on input activation
         """
         self.lyr -= 1;
+        #print("[DEBUG-PyTorch::ReLU::BWD] lyr: {}".format(self.lyr))
         gradin = gradout.detach()
         gradin_ptr = np.ctypeslib.as_ctypes(gradin.numpy().reshape(-1))
         self.lib.ReLU_bwd_bridge.restype = c_uint
@@ -296,9 +311,9 @@ class sgxDNN(object):
         #print("[DEBUG-PyTorch::ReLUPooling::FWD] layer: {}".format(self.lyr))
         #print("[DEBUG-PyTorch::ReLUPooling::FWD] input: {}".format(input.cpu()[0,0]))
         #print("[DEBUG-PyTorch::ReLUPooling::FWD] output: {}".format(output[0,0]))
+        #print("[DEBUG-PyTorch::ReLUPooling::FWD] sgx FWD time({}): {:.6f}".format( self.lyr, time.time() - start ))
         self.lyr += 1
         self.lyr_pooling += 1
-        #print("[DEBUG-PyTorch::ReLUPooling::FWD] sgx FWD time: {}".format( time.time() - start ))
         
         if self.lyr == self.n_lyrs:
             #print("[DEBUG-PyTorch::ReLUPooling::FWD] the last ReLUPooling layer.")
@@ -313,6 +328,7 @@ class sgxDNN(object):
         """
         self.lyr -= 1
         self.lyr_pooling -= 1
+        #print("[DEBUG-PyTorch::ReLUPooling::BWD] lyr: {}".format(self.lyr))
         gradin = torch.zeros_like(self.gradin_buffer[ self.lyr ]).cpu()
         if self.lyr == self.n_lyrs-1:
             gradout_sgx = gradout.cpu().detach().numpy()

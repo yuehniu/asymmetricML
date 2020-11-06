@@ -18,6 +18,7 @@ import torch
 import torch.nn as nn
 
 from .dnn_sgx import sgxReLU, sgxReLUPooling, sgxConv
+from .models.resnet import BasicBlock
 
 def transform_model(model, sgxdnn_Obj, use_SGX=True):
     print("[INFO] Transform model to the asymmetric version")

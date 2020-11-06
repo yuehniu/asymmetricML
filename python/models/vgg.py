@@ -22,10 +22,10 @@ model_urls = {
 
 class VGG(nn.Module):
 
-    def __init__(self, features, num_classes=1000, **kwargs):
+    def __init__(self, features, len_feature = 4608, num_classes=1000, **kwargs):
         super(VGG, self).__init__()
         self.features = features
-        self.classifier = nn.Linear(512, num_classes)
+        self.classifier = nn.Linear(len_feature, num_classes)
         self._initialize_weights()
 
     def forward(self, x):

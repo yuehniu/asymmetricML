@@ -33,12 +33,13 @@ sys.path.insert(0, './')
 from python.utils import build_network, infer_memory_size, init_model
 from python.dnn_transform import transform_model
 from python.dnn_sgx import sgxDNN
+from python.datasetutils import *
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='vgg16', type=str, help='model name')
 parser.add_argument('--device', default='gpu', type=str, choices=['gpu', 'cpu'], help='untrusted platform')
 parser.add_argument('--sgx', action='store_true', help='whether or not use sgx')
-parser.add_argument('--dataset', default='cifar10', type=str)
+parser.add_argument('--dataset', default='cifar10', type=str, choices=['cifar10', 'imagenet'])
 parser.add_argument('--root-dir', default='./', type=str)
 
 parser.add_argument('--batch-size', default=32, type=int)
@@ -58,7 +59,16 @@ def main():
     args = parser.parse_args()
 
     # build model
-    model = build_network(args.model, num_classes=10)
+    if (args.dataset == 'cifar10'):
+        model = build_network(args.model, len_feature=512, num_classes=10)
+        sz_img = 32
+        train_set = dataset_CIFAR10_train
+        test_set = dataset_CIFAR10_test
+    elif (args.dataset == 'imagenet'):
+        model = build_network(args.model, len_feature=4608, num_classes=1000)
+        sz_img = 112
+        train_set = dataset_IMAGENET_train
+        test_set = dataset_IMAGENET_test
     if args.device == 'gpu':
         model.cuda()
     else:
@@ -67,19 +77,11 @@ def main():
     # construct dataset
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     train_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root=args.root_dir+'/data/cifar10', train=True, transform=transforms.Compose([
-            transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(32, 4),
-            transforms.ToTensor(),
-            normalize,
-        ]), download=True),
+        train_set,
         batch_size=args.batch_size, shuffle=True, drop_last = True,
         num_workers=args.workers, pin_memory=True)
     val_loader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root=args.root_dir+'/data/cifar10', train=False, transform=transforms.Compose([
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        test_set,
         batch_size=args.batch_size, shuffle=False, drop_last = True,
         num_workers=args.workers, pin_memory=True)
 
@@ -95,7 +97,7 @@ def main():
             model.cpu()
 
         # Construct SGX execution Context
-        infer_memory_size(sgxdnn, model, need_sgx, args.batch_size, [3, 32, 32])
+        infer_memory_size(sgxdnn, model, need_sgx, args.batch_size, [3, sz_img, sz_img])
         sgxdnn.sgx_context(model, need_sgx)
 
         init_model(model)
@@ -153,12 +155,12 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
         output = model(input)
         #print("[DEBUG-PyTorch:Model] Out: {}".format(output))
         loss = criterion(output, target)
-        #loss.backward()
+        loss.backward()
 
         # update parameter
-        #optimizer.step()
+        optimizer.step()
 
-        #if i == 0:
+        #if i == 3:
         #    quit()
 
         # report acc and loss

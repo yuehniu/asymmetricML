@@ -9,6 +9,7 @@
 #include "datatype.h"
 #include "error_codes.h"
 
+//#define SGX_ONLY
 struct sgxContext {
     int nLyrs;
     int batchsize;
