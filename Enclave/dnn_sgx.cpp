@@ -100,7 +100,7 @@ extern "C" {
 
         return SUCCESS;
     }
-    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end){
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end, BOOL shortcut){
         lyrConfig* lyr_conf = sgx_ctx->config.at(lyr);
         conv_Config* conv_conf = lyr_conf->conv_conf;
         int batchsize = sgx_ctx->batchsize;
@@ -117,6 +117,22 @@ extern "C" {
 
         //re-arrange kernels
         int b_stride = b_end - b_beg;
+        float* in = sgx_ctx->bottom.at( lyr );
+        if ( shortcut == 1) {
+            float* in_prev = sgx_ctx->bottom.at( lyr-3 );
+            int beg = b_beg * r * n_ichnls;
+            int size = b_stride * r * n_ichnls;
+            int end = beg + size;
+            for( int i = beg; i < end; i++ ) {
+                *( in + i ) = *( in_prev + i );
+            }
+            beg = batchsize * r * n_ichnls + b_beg * r * Hi * Wi;
+            size = b_stride * r * Hi * Wi;
+            end = beg + size;
+            for( int i = beg; i < end; i++ ) {
+                *( in + i ) = *( in_prev + i );
+            }
+        }
 #ifndef SGX_ONLY
         //float* w_T = ( float* )malloc( sizeof(float) * b_stride * sz_w );
         float* w_T = sgx_ctx->w_T.at( lyr ) + b_beg * sz_w;
@@ -160,9 +176,8 @@ extern "C" {
         //->End Debug
 
         //convolution forward
-        float* in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
-
         // Eigen-based implementation
+        in = sgx_ctx->bottom.at( lyr ) + ( batchsize * r * n_ichnls );
         for (int b_ = b_beg; b_ < b_end; b_++) {
             int bi = b_ - b_beg;
             float* w_T_ptr = w_T + ( bi*n_ochnls*r ) * sz_kern2;
@@ -179,6 +194,14 @@ extern "C" {
             TensorMap< Tensor<float, 3, RowMajor> > tensor_out_b( out_ptr, n_ochnls, Wo, Ho );
             //Tensor<float, 3, RowMajor> tensor_out = tensor_out_b.shuffle(shuffles2);
             tensor_out_b.shuffle(shuffles2) = SpatialConvolution( tensor_in, tensor_w, stride, stride, PADDING_SAME );
+        }
+        if ( shortcut == 1) {
+            float* out_prev = sgx_ctx->top.at( lyr-1 );
+            int beg = b_beg * n_ochnls * Ho * Wo;
+            int size = b_stride * n_ochnls * Ho * Wo;
+            Map< Matrix<float, 1, Dynamic> > mat_out( out+beg, size );
+            Map< Matrix<float, 1, Dynamic> > mat_out_prev( out_prev+beg, size );
+            mat_out += mat_out_prev;
         }
 
         /* Naive implementation
@@ -238,12 +261,12 @@ extern "C" {
         //free( w_T );
 #else
         //convolution forward
-        float* in = sgx_ctx->bottom.at( lyr );
+        in = sgx_ctx->bottom.at( lyr );
         array<ptrdiff_t, 4> shuffles;
         shuffles[0] = 2; shuffles[1] = 3; shuffles[2] = 0; shuffles[3] = 1;
         array<ptrdiff_t, 3> shuffles2;
         shuffles2[0] = 1; shuffles2[1] = 2; shuffles2[2] = 0;
-        int ic_stride = 8;
+        int ic_stride = 4;
 
         // Eigen-based implementation
         for (int b_ = b_beg; b_ < b_end; b_++) {
@@ -261,6 +284,7 @@ extern "C" {
                 tensor_out_b.shuffle(shuffles2) += SpatialConvolution( tensor_in, tensor_w, stride, stride, PADDING_SAME );
             }
         }
+
 #endif
         return SUCCESS;
     }
@@ -334,13 +358,13 @@ extern "C" {
 
                             int in_left = j * stride - padding;
                             int out_left_beg = MAX( 0, -in_left);
-                            int in_right = in_left + Wi;
+                            int in_right = in_left + Wo;
                             in_left = MAX( 0, in_left );
                             in_right = MIN( Wi, in_right );
                             
                             int in_top = i * stride - padding;
                             int out_top_beg = MAX( 0, -in_top );
-                            int in_bottom = in_top + Hi;
+                            int in_bottom = in_top + Ho;
                             in_top = MAX( 0, in_top );
                             in_bottom = MIN( Hi, in_bottom );
 
@@ -412,13 +436,13 @@ extern "C" {
 
                         int in_left = j * stride - padding;
                         int out_left_beg = MAX( 0, -in_left);
-                        int in_right = in_left + Wi;
+                        int in_right = in_left + Wo;
                         in_left = MAX( 0, in_left );
                         in_right = MIN( Wi, in_right );
                             
                         int in_top = i * stride - padding;
                         int out_top_beg = MAX( 0, -in_top );
-                        int in_bottom = in_top + Hi;
+                        int in_bottom = in_top + Ho;
                         in_top = MAX( 0, in_top );
                         in_bottom = MIN( Hi, in_bottom );
 
@@ -443,6 +467,55 @@ extern "C" {
                         *( dw + (i*sz_kern + j) ) = dw_ij;
                         } } } }
 #endif
+        return SUCCESS;
+    }
+
+    ATTESTATION_STATUS sgx_add_ShortCut_ctx( sgxContext* sgx_ctx, int n_chnls, int H, int W ) {
+        shortcut_Config* sc_conf = ( shortcut_Config* ) malloc( sizeof( shortcut_Config) );
+        sc_conf->n_chnls = n_chnls;
+        sc_conf->H = H; sc_conf->W = W;
+        lyrConfig* lyr_conf = ( lyrConfig* )malloc( sizeof(lyrConfig) );
+        lyr_conf->shortcut_conf = sc_conf;
+	sgx_ctx->config.push_back(lyr_conf);
+
+        if( !sc_conf || !lyr_conf ) {
+            return MALLOC_ERROR;
+        }
+        int batchsize = sgx_ctx->batchsize;
+        int size = batchsize * n_chnls * H * W;
+        auto out_ptr = ( float* ) malloc( sizeof(float*) * size );
+        if ( !out_ptr ) {
+            return MALLOC_ERROR;
+        }
+
+        sgx_ctx->top.push_back( out_ptr );
+        sgx_ctx->bottom.push_back( NULL ); // no need to allocate memory
+        sgx_ctx->w_T.push_back( NULL );
+
+        sgx_ctx->sz_bottom.push_back( size );
+        sgx_ctx->sz_top.push_back( size );
+
+
+        return SUCCESS;
+    }
+    ATTESTATION_STATUS sgx_ShortCut_fwd( sgxContext* sgx_ctx, int lyr, int b_beg, int b_end ) {
+        lyrConfig* lyr_conf = sgx_ctx->config.at( lyr );
+        shortcut_Config* sc_conf = lyr_conf->shortcut_conf;
+        int n_chnls = sc_conf->n_chnls;
+        int W = sc_conf->W; int H = sc_conf->H;
+        int beg = b_beg * n_chnls * H * W;
+        int end = b_end * n_chnls * H * W;
+        int size = end - beg;
+ 
+        float* out_sgx_1 = sgx_ctx->top.at( lyr - 1 );
+        float* out_sgx_2 = sgx_ctx->top.at( lyr - 3 );
+        float* out_sgx = sgx_ctx->top.at( lyr );
+        Map< Matrix<float, 1, Dynamic> > mat_out_1 (out_sgx_1+beg, size );
+        Map< Matrix<float, 1, Dynamic> > mat_out_2 (out_sgx_2+beg, size );
+        Map< Matrix<float, 1, Dynamic> > mat_out (out_sgx+beg, size );
+
+        mat_out = mat_out_1 + mat_out_2;
+
         return SUCCESS;
     }
 

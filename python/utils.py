@@ -2,14 +2,16 @@ import torch
 import torch.nn as nn
 import math
 import numpy as np
-from .models import vgg11, vgg16, vgg19, resnet20
+from .models import vgg11, vgg16, vgg19, resnet20, resnet32
 
+dim_prev = []
 def build_network(model_name, **kwargs):
     models = {
         'vgg11': vgg11,
         'vgg16': vgg16,
         'vgg19': vgg19,
-        'resnet20': resnet20
+        'resnet20': resnet20,
+        'resnet32': resnet32
     }
 
     return models[model_name](**kwargs)
@@ -24,10 +26,19 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
     :param dim_in: dimension of input
     :return:
     """
-    dim_prev = []
+    global dim_prev
     sgx_dnn.batchsize = batchsize
     sgx_dnn.dim_in = dim_in
+    dim_block_first = dim_prev[:]
     for module, need in zip(model, need_sgx):
+        if module.type == "asymResBlock":
+            infer_memory_size( sgx_dnn, module.children(), need, batchsize, dim_in )
+        if module.type == "asymShortCut":
+            in_dim_cur = dim_prev
+            out_dim_cur = in_dim_cur
+            sgx_dnn.in_memory_desc[ module ]  = in_dim_cur
+            sgx_dnn.out_memory_desc[ module ] = out_dim_cur
+            sgx_dnn.lyr_config.append( None )
         if module.type == "asymReLU":
             in_dim_cur = dim_prev
             out_dim_cur = in_dim_cur
@@ -38,8 +49,10 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
             if len(dim_prev) == 0:
                 Hi, Wi = dim_in[1], dim_in[2]
-            else:
+            elif stride[ 0 ] == 1:
                 Hi, Wi = dim_prev[2], dim_prev[3]
+            else:
+                Hi, Wi = dim_block_first[ 2 ], dim_block_first[ 3 ]
             Ho = np.floor((Hi + 2*padding[0] - dilation[0]*(kern_sz[0]-1) - 1) / stride[0] + 1)
             Wo = np.floor((Wi + 2*padding[1] - dilation[1]*(kern_sz[1]-1) - 1) / stride[1] + 1)
             Ho, Wo = int(Ho), int(Wo)
@@ -49,11 +62,11 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             sgx_dnn.out_memory_desc[module] = out_dim_cur
             if module.type == 'asymConv2D':
                 sgx_dnn.lyr_config.append([module.in_channels, module.out_channels, kern_sz, stride, padding])
-        elif module.type == "asymReLUPooling" or isinstance(module, torch.nn.MaxPool2d):
-            padding, dilation, kern_sz, stride = module.padding, module.dilation, module.kernel_size, module.stride
+        elif module.type == "asymReLUPooling" or isinstance(module, torch.nn.MaxPool2d) or isinstance( module, torch.nn.AvgPool2d):
+            padding, kern_sz, stride = module.padding, module.kernel_size, module.stride
             out_channels, Hi, Wi = dim_prev[1], dim_prev[2], dim_prev[3]
-            Ho = np.floor((Hi + 2*padding - dilation*(kern_sz-1) - 1) / stride + 1)
-            Wo = np.floor((Wi + 2*padding - dilation*(kern_sz-1) - 1) / stride + 1)
+            Ho = np.floor((Hi + 2*padding - kern_sz) / stride + 1)
+            Wo = np.floor((Wi + 2*padding - kern_sz) / stride + 1)
             Ho, Wo = int(Ho), int(Wo)
             in_dim_cur = [batchsize, out_channels, Hi, Wi]
             sgx_dnn.in_memory_desc[module] = in_dim_cur
@@ -61,7 +74,8 @@ def infer_memory_size(sgx_dnn, model, need_sgx, batchsize, dim_in):
             sgx_dnn.out_memory_desc[module] = out_dim_cur
             sgx_dnn.lyr_config.append([out_channels, kern_sz, stride, padding])
 
-        dim_prev = out_dim_cur
+        if module.type != "asymResBlock":
+            dim_prev = out_dim_cur
 
 def init_model(model):
     for m in model:

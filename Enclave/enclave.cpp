@@ -36,8 +36,8 @@ extern "C" {
         return sgx_add_Conv_ctx(&sgx_ctx, n_ichnls, n_ochnls, sz_kern, stride, padding, Hi, Wi, Ho, Wo, r);
     }
 
-    uint32_t Conv_fwd_enclave(float *w, int lyr, int b_beg, int b_end) {
-        uint32_t status = sgx_Conv_fwd( &sgx_ctx, w, lyr, b_beg, b_end );
+    uint32_t Conv_fwd_enclave(float *w, int lyr, int b_beg, int b_end, BOOL shortcut) {
+        uint32_t status = sgx_Conv_fwd( &sgx_ctx, w, lyr, b_beg, b_end, shortcut );
 
         //char message[] = "[SGX:Trusted] Call Conv FWD\n";
         //printf(message);
@@ -46,6 +46,18 @@ extern "C" {
     
     uint32_t Conv_bwd_enclave( float* gradout, float* gradw, int lyr, int c_beg, int c_end ) {
         uint32_t status = sgx_Conv_bwd( &sgx_ctx, gradout, gradw, lyr, c_beg, c_end );
+
+        return status;
+    }
+
+    uint32_t add_ShortCut_ctx_enclave( int n_chnls, int H, int W ) {
+        char message[] = "[SGX:Trusted] Add ShortCut context\n";
+        printf( message );
+
+        return sgx_add_ShortCut_ctx( &sgx_ctx, n_chnls, H, W );
+    }
+    uint32_t ShortCut_fwd_enclave( int lyr, int b_beg, int b_end ) {
+        uint32_t status = sgx_ShortCut_fwd( &sgx_ctx, lyr, b_beg, b_end );
 
         return status;
     }
@@ -110,7 +122,7 @@ extern "C" {
             *( in_sgx+i ) = *( in+i );
         }
 
-        sgx_Conv_fwd( &sgx_ctx, w, 0, b_beg, b_end );
+        sgx_Conv_fwd( &sgx_ctx, w, 0, b_beg, b_end, 0 );
 
         float* out_sgx = sgx_ctx.top.at( 0 );
         int sz_out = sgx_ctx.sz_top.at( 0 );

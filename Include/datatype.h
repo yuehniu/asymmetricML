@@ -12,6 +12,11 @@ struct conv_Config {
     int Hi, Wi, Ho, Wo;
     int r;
 };
+struct shortcut_Config {
+    int n_chnls;
+    int H, W;
+    int r;
+};
 struct relu_Config {
     int n_chnls;
     int H, W;
@@ -29,6 +34,7 @@ struct relupooling_Config {
 
 union lyrConfig {
     struct conv_Config* conv_conf;
+    struct shortcut_Config* shortcut_conf;
     struct relu_Config* relu_conf;
     struct relupooling_Config* relupooling_conf;
 };

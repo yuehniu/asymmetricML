@@ -60,12 +60,16 @@ def main():
 
     # build model
     if (args.dataset == 'cifar10'):
-        model = build_network(args.model, len_feature=512, num_classes=10)
+        model = build_network(args.model, len_feature=512, num_classes=10) #ResNet:64 VGG:512
         sz_img = 32
         train_set = dataset_CIFAR10_train
         test_set = dataset_CIFAR10_test
     elif (args.dataset == 'imagenet'):
-        model = build_network(args.model, len_feature=4608, num_classes=1000)
+        if (args.model == 'vgg16' or args.model == 'vgg19' ):
+            len_feature = 4608
+        elif ( args.model == 'resnet20' or args.model== 'resnet32'):
+            len_feature = 256
+        model = build_network(args.model, len_feature=len_feature, num_classes=1000) #ResNet: 256 VGG:4608
         sz_img = 112
         train_set = dataset_IMAGENET_train
         test_set = dataset_IMAGENET_test
@@ -116,7 +120,13 @@ def main():
 
     # start training
     for epoch in range(0, args.epochs):
+        if args.sgx:
+            sgxdnn.clear_perf()
+
         prec1_train, loss_train = train(model, train_loader, criterion, optimizer, sgxdnn, epoch)
+
+        if args.sgx:
+            print_perf(sgxdnn.time_fwd, sgxdnn.time_bwd, sgxdnn.time_fwd_sgx, sgxdnn.time_bwd_sgx)
 
         prec1_val, loss_val = validate(model, val_loader, criterion, sgxdnn, epoch)
 
@@ -155,13 +165,13 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
         output = model(input)
         #print("[DEBUG-PyTorch:Model] Out: {}".format(output))
         loss = criterion(output, target)
-        loss.backward()
+        # loss.backward()
 
         # update parameter
-        optimizer.step()
+        # optimizer.step()
 
         #if i == 3:
-        #    quit()
+        #quit()
 
         # report acc and loss
         prec1 = cal_acc(output, target)[0]
@@ -181,6 +191,9 @@ def train(model, train_loader, criterion, optimizer, sgxdnn, epoch):
                   'Prec@1 {avg_acc.avg:.3f}'.format(
                       epoch, i, len(train_loader), batch_time = batch_time,
                       data_time = data_time, avg_loss = avg_loss, avg_acc = avg_acc))
+        if i == 1000:
+            print_perf( sgxdnn.time_fwd, sgxdnn.time_bwd, sgxdnn.time_fwd_sgx, sgxdnn.time_bwd_sgx )
+            quit()
 
     return avg_acc, avg_loss
 
@@ -231,6 +244,15 @@ def cal_acc(output, target, topk=(1,)):
         correct_k = correct[:k].view(-1).float().sum(0)
         acc.append(correct_k.mul_(100.0 / batch_size))
     return acc
+
+def print_perf(time_fwd, time_bwd, time_fwd_sgx, time_bwd_sgx):
+    """Print run time of fwd/bwd in Python and SGX
+    :param time_fwd/time_bwd: total run time of fwd/bwd on each layer
+    :param time_fwd/sgx/time_bwd_sgd: run time of fwd/bwd in sgx
+    """
+    for lyr in time_fwd:
+        print('Layer {}\t: forward time: {:.4f} (sgx: {:.4f}),\t backward time: {:.4f} (sgx: {:.4f})'.format(
+            lyr, time_fwd[lyr].avg, time_fwd_sgx[lyr].avg, time_bwd[lyr].avg, time_bwd_sgx[lyr].avg))
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

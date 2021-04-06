@@ -35,8 +35,12 @@ extern "C" {
 
     //Conv interface
     ATTESTATION_STATUS sgx_add_Conv_ctx(sgxContext* sgx_ctx, int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r);
-    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end);
+    ATTESTATION_STATUS sgx_Conv_fwd(sgxContext* sgx_ctx, float* w, int lyr, int b_beg, int b_end, BOOL shortcut);
     ATTESTATION_STATUS sgx_Conv_bwd(sgxContext* sgx_ctx, float* gradout, float* gradw, int lyr, int c_beg, int c_end);
+
+    //ShortCut interface
+    ATTESTATION_STATUS sgx_add_ShortCut_ctx(sgxContext* sgx_ctx, int n_chnls, int H, int W);
+    ATTESTATION_STATUS sgx_ShortCut_fwd( sgxContext* sgx_ctx, int lyr, int b_beg, int b_end );
 
     //ReLU interface
     ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chnls, int H, int W);

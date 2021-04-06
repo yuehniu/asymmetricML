@@ -7,9 +7,12 @@
 #include <stdio.h>
 #include <thread>
 #include <vector>
+#include <chrono>
 
 #define ENCLAVE_FILE_NAME "lib/libenclave.signed.so"
 #define N_THREADS 32
+
+using namespace std::chrono;
 
 struct sgxContext_public {
     int batchsize;
@@ -86,8 +89,11 @@ extern "C"
         return status;
     }
 
-    uint32_t Conv_fwd_bridge(sgx_enclave_id_t eid, float *w, int lyr ) {
+    uint32_t Conv_fwd_bridge(sgx_enclave_id_t eid, float *w, int lyr, BOOL shortcut, int *t ) {
         //std::cout << "[DEBUG-SGX-Bridge::Conv::FWD] " << *w << std::endl;
+
+        auto start = high_resolution_clock::now();
+
         uint32_t status[ N_THREADS ] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
         int b_stride = batchsize / N_THREADS;
@@ -95,7 +101,7 @@ extern "C"
         for( int i = 0; i < N_THREADS; i++ ){
             int b_beg = i * b_stride;
             int b_end = b_beg + b_stride;
-            trd[ i ] = std::thread( Conv_fwd_enclave, eid, status+i, w, lyr, b_beg, b_end );
+            trd[ i ] = std::thread( Conv_fwd_enclave, eid, status+i, w, lyr, b_beg, b_end, shortcut );
         }
         for( int i = 0; i < N_THREADS; i++ ){
             trd[ i ].join();
@@ -103,10 +109,16 @@ extern "C"
 
         //Conv_fwd_enclave(eid, &status, w, lyr);
 
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
+
         return status[ 0 ];
     }
 
-    uint32_t Conv_bwd_bridge( sgx_enclave_id_t eid, float* gradout, float* gradw, int lyr ) {
+    uint32_t Conv_bwd_bridge( sgx_enclave_id_t eid, float* gradout, float* gradw, int lyr, int *t ) {
+        auto start = high_resolution_clock::now();
+
         uint32_t status[ N_THREADS ] = {0};
         int n_ochnls = sgx_ctx_pub.n_ochnls.at( lyr );
         int batchsize = sgx_ctx_pub.batchsize;
@@ -123,6 +135,37 @@ extern "C"
 
         //Conv_bwd_enclave( eid, &status, gradout, gradw, lyr );
 
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
+
+        return status[ 0 ];
+    }
+
+    uint32_t add_ShortCut_ctx_bridge( sgx_enclave_id_t eid, int n_chnls, int H, int W ) {
+        uint32_t status = 0;
+        add_ShortCut_ctx_enclave( eid, &status, n_chnls, H, W );
+
+        sgx_ctx_pub.n_ichnls.push_back( n_chnls );
+        sgx_ctx_pub.n_ochnls.push_back( n_chnls );
+
+        return status;
+    }
+
+    uint32_t ShortCut_fwd_bridge( sgx_enclave_id_t eid, int lyr ) {
+        uint32_t status[ N_THREADS ] = { 0 };
+        int batchsize = sgx_ctx_pub.batchsize;
+        int b_stride = batchsize / N_THREADS;
+        std::thread trd[ N_THREADS ];
+        for( int i = 0; i < N_THREADS; i++ ) {
+            int b_beg = i * b_stride;
+            int b_end = b_beg + b_stride;
+            trd[ i ] = std::thread( ShortCut_fwd_enclave, eid, status+i, lyr, b_beg, b_end );
+        }
+        for( int i = 0; i < N_THREADS; i++ ) {
+            trd[ i ].join();
+        }
+
         return status[ 0 ];
     }
 
@@ -137,7 +180,9 @@ extern "C"
         return status;
     }
 
-    uint32_t ReLU_fwd_bridge(sgx_enclave_id_t eid, float* out, int lyr) {
+    uint32_t ReLU_fwd_bridge(sgx_enclave_id_t eid, float* out, int lyr, int *t) {
+        auto start = high_resolution_clock::now();
+
         uint32_t status[N_THREADS] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
         int b_stride = batchsize / N_THREADS;
@@ -151,11 +196,17 @@ extern "C"
             trd[ i ].join();
         }
         //ReLU_fwd_enclave(eid, status, out, lyr, 0, batchsize);
+
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
         
         return status[ 0 ];
     }
 
-    uint32_t ReLU_bwd_bridge(sgx_enclave_id_t eid, float* gradin, int lyr) {
+    uint32_t ReLU_bwd_bridge(sgx_enclave_id_t eid, float* gradin, int lyr, int *t) {
+        auto start = high_resolution_clock::now();
+
         uint32_t status[N_THREADS] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
         int b_stride = batchsize / N_THREADS;
@@ -170,6 +221,10 @@ extern "C"
         }
         //ReLU_bwd_enclave(eid, status, gradin, lyr, 0, batchsize);
 
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
+
         return status[ 0 ];
     }
 
@@ -183,7 +238,9 @@ extern "C"
         return status;
     }
 
-    uint32_t ReLUPooling_fwd_bridge(sgx_enclave_id_t eid, float* in, float* out, int lyr, int lyr_pooling) {
+    uint32_t ReLUPooling_fwd_bridge(sgx_enclave_id_t eid, float* in, float* out, int lyr, int lyr_pooling, int *t) {
+        auto start = high_resolution_clock::now();
+
         uint32_t status[N_THREADS] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
         int b_stride = batchsize / N_THREADS;
@@ -197,11 +254,17 @@ extern "C"
             trd[ i ].join();
         }
         //ReLUPooling_fwd_enclave(eid, &status, in, out, lyr, lyr_pooling);
+
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
         
         return status[ 0 ];
     }
 
-    uint32_t ReLUPooling_bwd_bridge(sgx_enclave_id_t eid, float* gradout, float* gradin, int lyr, int lyr_pooling) {
+    uint32_t ReLUPooling_bwd_bridge(sgx_enclave_id_t eid, float* gradout, float* gradin, int lyr, int lyr_pooling, int *t) {
+        auto start = high_resolution_clock::now();
+
         //std::cout << "[DEBUG-SGX-Bridge::ReLUPooling::BWD] " << *gradout << std::endl;
         uint32_t status[N_THREADS] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
@@ -216,6 +279,10 @@ extern "C"
             trd[ i ].join();
         }
         //ReLUPooling_bwd_enclave(eid, &status, gradout, gradin, lyr, lyr_pooling);
+
+        auto end = high_resolution_clock::now();
+        auto duration = duration_cast<microseconds>(end - start);
+        *t = duration.count();
 
         return status[ 0 ];
     }

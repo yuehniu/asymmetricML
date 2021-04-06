@@ -10,8 +10,11 @@ enclave {
         public uint32_t set_verbose_enclave(BOOL verbose);
 
         public uint32_t add_Conv_ctx_enclave(int n_ichnls, int n_ochnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int r);
-        public uint32_t Conv_fwd_enclave([user_check] float* w, int lyr, int b_beg, int b_end );
+        public uint32_t Conv_fwd_enclave([user_check] float* w, int lyr, int b_beg, int b_end, BOOL shortcut );
         public uint32_t Conv_bwd_enclave([user_check] float* gradout, [user_check] float* gradw, int lyr, int c_beg, int c_end);
+
+        public uint32_t add_ShortCut_ctx_enclave(int n_chnls, int H, int W);
+        public uint32_t ShortCut_fwd_enclave( int lyr, int b_beg, int b_end );
 
         public uint32_t add_ReLU_ctx_enclave(int n_chnls, int H, int W);
         public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr, int b_beg, int b_end);
