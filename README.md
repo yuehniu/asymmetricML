@@ -3,9 +3,9 @@
 ## Introduction
 An *asymmetric* ML framework which automatically splits a DNN model in an asymmetric manner, then distributes the respective computations into trusted platform (Intel SGX-enabled CPUs) and untrusted platform (GPUs). The trusted platform keeps most sensitive information with only manageable computation cost. On the other hand, the untrusted platform undertakes most computation with little information leaked.
 
-![asymmetricML Framework](asymDNNImpl.png)
+![asymmetricML Framework](AsymML_impl.png)
 
-Figure above shows a overview of the asymmetricML framework. There are two running contexts running in parallel: PyTorch context acts as the coordinator to split a model, distribute computations, conduct computations on less sensitive data, and activate SGX context; SGX context conducts computations on sensitive data.
+Figure above shows a overview of the asymmetricML framework. There are two running contexts running in parallel: GPU context acts as convolutional layer acceleration, model update; SGX context conducts computations on sensitive data, such as partial convolutional layers, ReLU layers, Pooling layers.
 
 A dedicated DNN library is implemented in SGX context, in which Conv (FWD/BWD), ReLU(FWD/BWD), and Pooling(FWD/BWD) is supported. To further reduce memory operations, a Pooling op is fused with a ReLU op just before it. Beside of these DNN ops, a light SVD approximation op is also included to calculate "principle channels" on the fly. Since current SGX SDK does not support common tensor libraries as TensorFlow, PyTorch, even Intel MKL, we adopt Eigen3 and recompile it to fit into the SGX environment.
 
