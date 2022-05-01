@@ -115,7 +115,7 @@ extern "C" {
         int padding = conv_conf->padding;
         float* out = sgx_ctx->top.at( lyr );
 
-        //re-arrange kernels
+        //if it is shortcut connection
         int b_stride = b_end - b_beg;
         float* in = sgx_ctx->bottom.at( lyr );
         if ( shortcut == 1) {
@@ -551,7 +551,7 @@ extern "C" {
     * @param b_beg: mini-batch begin
     * @param b_end: mini-batch end
     */
-    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float *out, int lyr, int b_beg, int b_end) {
+    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float *out, int lyr, int b_beg, int b_end, float* p) {
 	//-> Merge input
         lyrConfig* lyr_conf = sgx_ctx->config.at( lyr );
         int n_chnls = lyr_conf->relu_conf->n_chnls;
@@ -585,6 +585,14 @@ extern "C" {
 
         //-> Apply ReLU op
         mat_untrust = mat_merge.cwiseMax(0.0);
+
+        //-> Compute total signal power
+        float ptmp = 0.0;
+        for (int i = beg; i < end; i++ ) {
+            float val = *(out+i);
+            ptmp += (val * val);
+        }
+        *p = ptmp;
 
 #ifndef SGX_ONLY
         //-> Resplit data using light-weight SVD

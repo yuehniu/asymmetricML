@@ -68,10 +68,10 @@ extern "C" {
         return sgx_add_ReLU_ctx(&sgx_ctx, n_chnls, H, W);
     }
 
-    uint32_t ReLU_fwd_enclave(float* out, int lyr, int b_beg, int b_end) {
+    uint32_t ReLU_fwd_enclave(float* out, int lyr, int b_beg, int b_end, float* p) {
         //char message[] = "[SGX:Trusted] Call ReLU FWD\n";
         //printf(message);
-        uint32_t status = sgx_ReLU_fwd(&sgx_ctx, out, lyr, b_beg, b_end);
+        uint32_t status = sgx_ReLU_fwd(&sgx_ctx, out, lyr, b_beg, b_end, p);
 
         return status;
     }
@@ -154,7 +154,8 @@ extern "C" {
         }
 
         //-> ReLU FWD
-        sgx_ReLU_fwd( &sgx_ctx, in_gpu, 1, b_beg, b_end);
+        float* ptmp = NULL;
+        sgx_ReLU_fwd( &sgx_ctx, in_gpu, 1, b_beg, b_end, ptmp);
 
         lyr_conf = sgx_ctx.config.at( 1 );
         int r = lyr_conf->relu_conf->r;

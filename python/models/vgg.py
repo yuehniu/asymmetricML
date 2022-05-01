@@ -19,6 +19,11 @@ model_urls = {
     'vgg19': 'https://download.pytorch.org/models/vgg19-dcbb9e9d.pth',
 }
 
+vgg_rank = {
+    'vgg11': [ 4, 10, 16, 32, 32, 32, 32, 32 ],
+    'vgg16': [ 4, 16, 16, 32, 32, 32, 32, 32, 32, 32, 32, 32, 32 ],
+}
+
 
 class VGG(nn.Module):
 
@@ -55,6 +60,7 @@ def make_layers(cfg, batch_norm=False):
     in_channels = 3
     for v in cfg:
         if v == 'M':
+            layers[ -1 ] = nn.LeakyReLU()
             layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
         else:
             conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)

@@ -180,21 +180,28 @@ extern "C"
         return status;
     }
 
-    uint32_t ReLU_fwd_bridge(sgx_enclave_id_t eid, float* out, int lyr, int *t) {
+    uint32_t ReLU_fwd_bridge(sgx_enclave_id_t eid, float* out, int lyr, int *t, float* p) {
         auto start = high_resolution_clock::now();
 
         uint32_t status[N_THREADS] = {0};
         int batchsize = sgx_ctx_pub.batchsize;
         int b_stride = batchsize / N_THREADS;
         std::thread trd[N_THREADS];
+        float plist[N_THREADS];
         for( int i = 0; i < N_THREADS; i++ ) {
             int b_beg = i * b_stride;
             int b_end = b_beg + b_stride;
-            trd[ i ] = std::thread( ReLU_fwd_enclave, eid, status+i, out, lyr, b_beg, b_end);
+            trd[ i ] = std::thread( ReLU_fwd_enclave, eid, status+i, out, lyr, b_beg, b_end, plist+i);
         }
         for( int i = 0; i < N_THREADS; i++ ) {
             trd[ i ].join();
         }
+
+        float ptmp = 0.0;
+        for ( int i = 0; i < N_THREADS; i++ ) {
+            ptmp += plist[ i ];
+        }
+        *p = ptmp;
         //ReLU_fwd_enclave(eid, status, out, lyr, 0, batchsize);
 
         auto end = high_resolution_clock::now();

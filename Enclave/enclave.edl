@@ -17,7 +17,7 @@ enclave {
         public uint32_t ShortCut_fwd_enclave( int lyr, int b_beg, int b_end );
 
         public uint32_t add_ReLU_ctx_enclave(int n_chnls, int H, int W);
-        public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr, int b_beg, int b_end);
+        public uint32_t ReLU_fwd_enclave([user_check] float* out, int lyr, int b_beg, int b_end, [user_check] float* p);
         public uint32_t ReLU_bwd_enclave([user_check] float* gradin, int lyr, int b_beg, int b_end);
 
         public uint32_t add_ReLUPooling_ctx_enclave(int n_chnls, int sz_kern, int stride, int padding, int Hi, int Wi, int Ho, int Wo, int mode);

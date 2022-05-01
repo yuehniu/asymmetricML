@@ -1,13 +1,11 @@
 """DNN operators in SGX
 Description:
-    This file contains essential operators for DNN layers in SGX:
-    - conv_fwd/bwd: part of Conv2d operations (Forward/Backward);
-    - relu_fwd/bwd: a full private ReLU operator in SGX (Forward/Backward);
-    - relupooling_fwd/bwd: a full private Pooling operator in SGX (Forward/Backward);
+    This file contains essential operators for DNN layers in SGX
+    - conv_fwd/bwd: part of Conv2d operations (Forward/Backward)
+    - relu_fwd/bwd: a full private ReLU operator in SGX (Forward/Backward)
+    - relupooling_fwd/bwd: a full private Pooling operator in SGX (Forward/Backward)
 
 Author:
-    Yue (Julien) Niu
-
 Note:
 """
 from ctypes import *
@@ -62,14 +60,16 @@ class sgxDNN(object):
         self.gradw_buffer = []
         self.lyr_config = []
         self.n_lyrs = 0
-        self.r = 1
-        self.rr = 1
+        self.r = 2
+        self.rr = 2
 
-        # performance measure
+        # performance measure (only for debug purposed)
         self.time_fwd = dict()
         self.time_bwd = dict()
         self.time_fwd_sgx = dict()
         self.time_bwd_sgx = dict()
+        self.power_fwd_sgx = dict()
+        self.power_fwd = dict()
 
     def reset(self):
         self.lyr = 0
@@ -82,6 +82,9 @@ class sgxDNN(object):
         for lyr in self.time_bwd:
             self.time_bwd[lyr] = AverageMeter()
             self.time_bwd_sgx[lyr] = AverageMeter()
+        for lyr in self.power_fwd:
+            self.power_fwd[lyr] = AverageMeter()
+            self.power_fwd_sgx[lyr] = AverageMeter()
 
     def sgx_context(self, model, need_SGX):
         """Build SGX context including set hyperparameters, initialize memory
@@ -95,8 +98,8 @@ class sgxDNN(object):
                     self.n_lyrs += 1
                 if module.type == "asymResBlock": #TODO
                     self.sgx_context( module.children(), need )
-                    self.r = min( self.r*2, 8) 
-                    self.rr = self.r
+                    # self.r = min( self.r*2, 8) 
+                    # self.rr = self.r
                 if module.type == "asymConv2D":
                     n_ichnls = self.in_memory_desc[ module ][ 1 ]
                     n_ochnls = self.out_memory_desc[ module ][ 1 ]
@@ -117,13 +120,16 @@ class sgxDNN(object):
                     # self.gradin_buffer.append( torch.zeros( *self.in_memory_desc[ module ] ).cpu() ) 
                     self.gradin_buffer.append( None ) 
                     self.gradw_buffer.append( torch.zeros(n_ochnls, n_ichnls, sz_kern, sz_kern, device='cpu', pin_memory=True).reshape(-1) )
-                    # self.r = min( self.r*2, 16) 
-                    # self.rr = self.r
+                    self.r = min( self.r*2, 32) 
+                    self.rr = self.r
 
                     self.time_fwd['Conv'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_bwd['Conv'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_fwd_sgx['Conv'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_bwd_sgx['Conv'+str(self.n_lyrs-1)] = AverageMeter()
+
+                    self.power_fwd['Conv'+str(self.n_lyrs-1)] = AverageMeter()
+                    self.power_fwd_sgx['Conv'+str(self.n_lyrs-1)] = AverageMeter()
 
                 if module.type == "asymShortCut":
                     in_channels = self.in_memory_desc[ module ][ 1 ]
@@ -158,6 +164,9 @@ class sgxDNN(object):
                     self.time_fwd_sgx['ReLU'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_bwd_sgx['ReLU'+str(self.n_lyrs-1)] = AverageMeter()
 
+                    self.power_fwd['ReLU'+str(self.n_lyrs-1)] = AverageMeter()
+                    self.power_fwd_sgx['ReLU'+str(self.n_lyrs-1)] = AverageMeter()
+
                 if module.type == "asymReLUPooling":
                     #print("Add ReLUPooling context")
                     in_channels = self.in_memory_desc[module][1]
@@ -183,6 +192,9 @@ class sgxDNN(object):
                     self.time_bwd['ReLUPooling'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_fwd_sgx['ReLUPooling'+str(self.n_lyrs-1)] = AverageMeter()
                     self.time_bwd_sgx['ReLUPooling'+str(self.n_lyrs-1)] = AverageMeter()
+
+                    self.power_fwd['ReLUPooling'+str(self.n_lyrs-1)] = AverageMeter()
+                    self.power_fwd_sgx['ReLUPooling'+str(self.n_lyrs-1)] = AverageMeter()
 
     # Conv interface
     def conv_fwd(self, input, weight, bias, shortcut):
@@ -334,16 +346,21 @@ class sgxDNN(object):
         output_sgx = output.numpy() # in-place operation
         output_ptr = np.ctypeslib.as_ctypes(output_sgx.reshape(-1))
         t = np.array([0], dtype = np.int32)
+        p = np.array([0], dtype = np.float32)
         t_ptr = np.ctypeslib.as_ctypes(t.reshape(-1))
+        p_ptr = np.ctypeslib.as_ctypes(p.reshape(-1))
         self.lib.ReLU_fwd_bridge.restype = c_uint
-        self.lib.ReLU_fwd_bridge.argtypes = [c_ulong, POINTER(c_float), c_int, POINTER(c_int)]
-        status = self.lib.ReLU_fwd_bridge(self.eid, output_ptr, self.lyr, t_ptr)
+        self.lib.ReLU_fwd_bridge.argtypes = [c_ulong, POINTER(c_float), c_int, POINTER(c_int), POINTER(c_float)]
+        status = self.lib.ReLU_fwd_bridge(self.eid, output_ptr, self.lyr, t_ptr, p_ptr)
         if status != 0:
             print("[PyTorch] ReLU FWD failed with error code {}".format(hex(status) ) )
             quit()
 
         self.time_fwd['ReLU'+str(self.lyr)].update(time.time() - start)
         self.time_fwd_sgx['ReLU'+str(self.lyr)].update(t[0]/1000000)
+
+        self.power_fwd['ReLU'+str(self.lyr)].update( np.sum(output_sgx ** 2) )
+        self.power_fwd_sgx['ReLU'+str(self.lyr)].update( p[0] )
 
         self.lyr += 1
         return output

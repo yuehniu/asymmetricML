@@ -45,7 +45,7 @@ extern "C" {
     //ReLU interface
     ATTESTATION_STATUS sgx_add_ReLU_ctx(sgxContext* sgx_ctx, int n_chnls, int H, int W);
 
-    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float* out, int lyr, int b_beg, int b_end);
+    ATTESTATION_STATUS sgx_ReLU_fwd(sgxContext* sgx_ctx, float* out, int lyr, int b_beg, int b_end, float* p);
 
     ATTESTATION_STATUS sgx_ReLU_bwd(sgxContext* sgx_ctx, float* gradin, int lyr, int b_beg, int b_end);
 
